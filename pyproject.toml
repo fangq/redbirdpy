@@ -1,0 +1,102 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools-scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redbird"
+version = "0.1.0"
+description = "A Python toolbox for Diffuse Optical Tomography (DOT) and Near-Infrared Spectroscopy (NIRS)"
+readme = "README.md"
+license = {text = "GPL-3.0"}
+authors = [
+    {name = "Qianqian Fang", email = "fangqq@gmail.com"}
+]
+maintainers = [
+    {name = "Qianqian Fang", email = "fangqq@gmail.com"}
+]
+keywords = [
+    "Diffuse Optical Tomography",
+    "DOT",
+    "NIRS",
+    "Near-Infrared Spectroscopy",
+    "FEM",
+    "Finite Element Method",
+    "Biomedical Optics",
+    "Image Reconstruction",
+    "Inverse Problem",
+    "Photon Migration",
+    "Diffusion Equation",
+    "Tissue Optics",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Healthcare Industry",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.6"
+dependencies = [
+    "numpy>=1.15.0",
+    "scipy>=1.0.0",
+]
+
+[project.optional-dependencies]
+mesh = ["iso2mesh>=0.1.0"]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov>=2.0",
+    "flake8>=3.0",
+]
+all = [
+    "iso2mesh>=0.1.0",
+    "matplotlib>=3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/fangq/redbird"
+Documentation = "https://github.com/fangq/redbird#readme"
+Repository = "https://github.com/fangq/redbird"
+"Bug Tracker" = "https://github.com/fangq/redbird/issues"
+
+[tool.setuptools]
+zip-safe = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["redbird", "redbird.*"]
+exclude = ["tests", "tests.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["redbird"]
+branch = true
+omit = ["tests/*", "setup.py"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

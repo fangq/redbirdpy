@@ -1,0 +1,24 @@
+include LICENSE
+include README.md
+include CHANGELOG.md
+include setup.py
+include setup.cfg
+include pyproject.toml
+
+recursive-include redbird *.py
+recursive-include tests *.py
+
+recursive-exclude * __pycache__
+recursive-exclude * *.py[cod]
+recursive-exclude * *.so
+recursive-exclude * *.dylib
+
+exclude .gitignore
+exclude .travis.yml
+exclude .github
+recursive-exclude .github *
+
+prune docs/_build
+prune dist
+prune build
+prune *.egg-info
