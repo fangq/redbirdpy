@@ -91,6 +91,9 @@ def runrecon(
     elif prior_type and "seg" in recon:
         Aregu["lmat"] = prior(recon["seg"], prior_type, kwargs)
 
+    # Determine if using dual mesh
+    dual_mesh = "node" in recon and "elem" in recon and "mapid" in recon
+
     # Main iteration loop
     for iteration in range(maxiter):
         t_start = time.time()
@@ -143,21 +146,28 @@ def runrecon(
         else:
             blocks = {"mua": Jmua.shape}
 
-        # Flatten Jacobian and reformat
+        # Flatten Jacobian
         Jflat = matflat(Jmua)
 
+        # Reformat for real-valued solver if needed
         if reform != "complex":
             Jflat, misfit, nblock = matreform(Jflat, detphi0_flat, detphi_flat, reform)
         else:
             misfit = detphi0_flat - detphi_flat
 
         # Map Jacobian to recon mesh if dual-mesh
-        if "mapid" in recon and "mapweight" in recon:
+        if dual_mesh:
             Jflat = _remap_jacobian(Jflat, recon, cfg)
+            # Update blocks to reflect recon mesh size
+            nn_recon = recon["node"].shape[0]
+            blocks = {k: (v[0], nn_recon) for k, v in blocks.items()}
 
         # Compress for segmented reconstruction
         if "seg" in recon and np.ndim(recon["seg"]) == 1:
             Jflat = _masksum(Jflat, recon["seg"])
+            # Update blocks to reflect compressed size
+            n_labels = len(np.unique(recon["seg"]))
+            blocks = {k: (v[0], n_labels) for k, v in blocks.items()}
 
         # Store residual
         resid[iteration] = np.sum(np.abs(misfit))
@@ -176,31 +186,72 @@ def runrecon(
         # Solve inverse problem
         dmu = reginv(Jflat, misfit, lambda_, Aregu, blocks, **solverflag)
 
-        # Parse update and apply
+        # Parse update and apply to recon structure
         update = {}
         idx = 0
         output_keys = list(blocks.keys())
+
         for key in output_keys:
             size = blocks[key][1]
             dx = dmu[idx : idx + size]
             update[key] = dx
             idx += size
 
-            # Apply update to appropriate structure
+            # Apply update to recon structure (not cfg!)
             if key in ["mua", "dcoeff"]:
                 propidx = 0 if key == "mua" else 1
                 if "prop" in recon:
-                    if key == "dcoeff":
-                        dcoeff = 1.0 / (3 * recon["prop"][:, propidx])
-                        dcoeff = dcoeff + dx
-                        recon["prop"][:, propidx] = 1.0 / (3 * dcoeff)
-                    else:
-                        recon["prop"][:, propidx] = recon["prop"][:, propidx] + dx
+                    if isinstance(recon["prop"], np.ndarray):
+                        if "seg" in recon and np.ndim(recon["seg"]) == 1:
+                            # Label-based: update each label's property
+                            labels = np.unique(recon["seg"])
+                            for li, label in enumerate(labels):
+                                if label > 0 and label < recon["prop"].shape[0]:
+                                    if key == "dcoeff":
+                                        old_dcoeff = 1.0 / (
+                                            3 * recon["prop"][label, propidx]
+                                        )
+                                        new_dcoeff = old_dcoeff + dx[li]
+                                        recon["prop"][label, propidx] = 1.0 / (
+                                            3 * new_dcoeff
+                                        )
+                                    else:
+                                        recon["prop"][label, propidx] += dx[li]
+                        else:
+                            # Node/element based
+                            if key == "dcoeff":
+                                old_dcoeff = 1.0 / (3 * recon["prop"][:, propidx])
+                                new_dcoeff = old_dcoeff + dx
+                                recon["prop"][:, propidx] = 1.0 / (3 * new_dcoeff)
+                            else:
+                                recon["prop"][:, propidx] += dx
+
             elif key in ["hbo", "hbr", "water", "lipids", "scatamp", "scatpow"]:
-                if "node" in recon:
-                    recon["param"][key] = recon["param"][key] + dx
-                else:
-                    cfg["param"][key] = cfg["param"][key] + dx
+                if "param" in recon:
+                    if "seg" in recon and np.ndim(recon["seg"]) == 1:
+                        # Label-based
+                        labels = np.unique(recon["seg"])
+                        if hasattr(recon["param"][key], "__len__"):
+                            for li, label in enumerate(labels):
+                                if li < len(recon["param"][key]):
+                                    recon["param"][key][li] += dx[li]
+                        else:
+                            recon["param"][key] += dx[0]
+                    else:
+                        # Node/element based
+                        recon["param"][key] = recon["param"][key] + dx
+                elif "param" in cfg:
+                    # Single mesh case - update cfg directly
+                    if "seg" in recon and np.ndim(recon["seg"]) == 1:
+                        labels = np.unique(recon["seg"])
+                        if hasattr(cfg["param"][key], "__len__"):
+                            for li, label in enumerate(labels):
+                                if li < len(cfg["param"][key]):
+                                    cfg["param"][key][li] += dx[li]
+                        else:
+                            cfg["param"][key] += dx[0]
+                    else:
+                        cfg["param"][key] = cfg["param"][key] + dx
 
         updates.append(update)
 
@@ -208,7 +259,7 @@ def runrecon(
             elapsed = time.time() - t_start
             rel_resid = resid[iteration] / resid[0] if iteration > 0 else 1.0
             print(
-                f"iter [{iteration+1:4d}]: residual={resid[iteration]:.6e}, "
+                f"iter [{iteration + 1:4d}]: residual={resid[iteration]:.6e}, "
                 f"relres={rel_resid:.6e} lambda={lambda_:.6e} (time={elapsed:.2f} s)"
             )
 
@@ -561,30 +612,54 @@ def syncprop(cfg: dict, recon: dict) -> Tuple[dict, dict]:
     Synchronize properties between forward and reconstruction meshes.
 
     Handles both single-mesh and dual-mesh reconstruction scenarios.
-    mapid contains 0-based element indices from tsearchn.
+
+    For dual-mesh reconstruction:
+    - recon mesh is typically coarser than forward mesh
+    - mapid/mapweight map FORWARD mesh nodes to RECON mesh elements
+    - We interpolate from recon mesh to forward mesh
+
+    mapid contains 0-based element indices into recon["elem"].
     """
     from . import utility
 
-    # Determine if we're in label mode or node/element mode
-    labelmax = min(cfg["node"].shape[0], cfg["elem"].shape[0])
+    # Determine mesh sizes
+    cfg_nn = cfg["node"].shape[0]
+    cfg_ne = cfg["elem"].shape[0]
+
     if "node" in recon and "elem" in recon:
-        labelmax = min(recon["node"].shape[0], recon["elem"].shape[0])
+        recon_nn = recon["node"].shape[0]
+        recon_ne = recon["elem"].shape[0]
+    else:
+        recon_nn = cfg_nn
+        recon_ne = cfg_ne
+
+    # Threshold to distinguish label-based from node/element-based
+    labelmax = min(recon_nn, recon_ne)
 
     if "param" in recon:
         # Map recon.param to cfg.param
         allkeys = list(recon["param"].keys())
         first_param = recon["param"][allkeys[0]]
+        param_len = len(first_param) if hasattr(first_param, "__len__") else 1
 
-        if len(first_param) < labelmax:
-            # Label-based - direct copy
-            cfg["param"] = recon["param"].copy()
+        if param_len < labelmax:
+            # Label-based - direct copy (no interpolation needed)
+            cfg["param"] = {
+                k: v.copy() if hasattr(v, "copy") else v
+                for k, v in recon["param"].items()
+            }
         else:
-            # Node/element based - interpolate using mapping
+            # Node/element based - need interpolation for dual-mesh
             if "param" not in cfg:
                 cfg["param"] = {}
+
             for key in allkeys:
-                if "mapid" in recon and "mapweight" in recon:
-                    # mapid is 0-based, meshinterp handles the indexing
+                if "mapid" in recon and "mapweight" in recon and "elem" in recon:
+                    # Interpolate from recon mesh to forward mesh nodes
+                    # mapid: forward mesh node -> recon mesh element (0-based)
+                    # mapweight: barycentric coords in recon mesh element
+                    # recon["elem"]: recon mesh connectivity (1-based)
+                    # recon["param"][key]: values at recon mesh nodes
                     cfg["param"][key] = utility.meshinterp(
                         recon["param"][key],
                         recon["mapid"],
@@ -593,27 +668,37 @@ def syncprop(cfg: dict, recon: dict) -> Tuple[dict, dict]:
                         cfg["param"].get(key),
                     )
                 else:
+                    # Same mesh - direct copy
                     cfg["param"][key] = recon["param"][key].copy()
 
     elif "prop" in recon:
         # Map recon.prop to cfg.prop
         if not isinstance(recon["prop"], dict):
-            if recon["prop"].shape[0] < labelmax:
+            prop_len = recon["prop"].shape[0]
+
+            if prop_len < labelmax:
+                # Label-based
                 cfg["prop"] = recon["prop"].copy()
-            elif "mapid" in recon:
+            elif "mapid" in recon and "mapweight" in recon and "elem" in recon:
+                # Interpolate from recon to forward mesh
                 cfg["prop"] = utility.meshinterp(
                     recon["prop"],
                     recon["mapid"],
                     recon["mapweight"],
                     recon["elem"],
-                    cfg["prop"],
+                    cfg.get("prop"),
                 )
+            else:
+                cfg["prop"] = recon["prop"].copy()
         else:
             # Multi-wavelength
             allkeys = list(recon["prop"].keys())
-            if recon["prop"][allkeys[0]].shape[0] < labelmax:
+            first_prop = recon["prop"][allkeys[0]]
+            prop_len = first_prop.shape[0]
+
+            if prop_len < labelmax:
                 cfg["prop"] = {k: v.copy() for k, v in recon["prop"].items()}
-            elif "mapid" in recon:
+            elif "mapid" in recon and "mapweight" in recon and "elem" in recon:
                 cfg["prop"] = {}
                 for k in allkeys:
                     cfg["prop"][k] = utility.meshinterp(
@@ -623,6 +708,8 @@ def syncprop(cfg: dict, recon: dict) -> Tuple[dict, dict]:
                         recon["elem"],
                         cfg.get("prop", {}).get(k),
                     )
+            else:
+                cfg["prop"] = {k: v.copy() for k, v in recon["prop"].items()}
 
     return cfg, recon
 
@@ -680,24 +767,44 @@ def _remap_jacobian(J: np.ndarray, recon: dict, cfg: dict) -> np.ndarray:
         Jacobian on reconstruction mesh (Nsd x Nn_recon)
     """
     nn_recon = recon["node"].shape[0]
+    nn_forward = J.shape[1]
     nsd = J.shape[0]
 
     J_new = np.zeros((nsd, nn_recon), dtype=J.dtype)
 
-    mapid = recon["mapid"]  # 0-based element indices
+    mapid = recon["mapid"]  # 0-based element indices into recon mesh
     mapweight = recon["mapweight"]  # Barycentric coordinates (Nn_forward x 4)
 
     # Convert 1-based elem to 0-based for numpy indexing
     elem_0 = recon["elem"][:, :4].astype(int) - 1
+    n_elem = elem_0.shape[0]
 
     # For each forward mesh node, distribute its Jacobian contribution
     # to the reconstruction mesh nodes of the enclosing element
-    for i in range(J.shape[1]):
-        if not np.isnan(mapid[i]):
-            eid = int(mapid[i])  # 0-based element index
-            for j in range(4):
-                node_idx = elem_0[eid, j]  # 0-based node index
-                J_new[:, node_idx] += J[:, i : i + 1].flatten() * mapweight[i, j]
+    for i in range(nn_forward):
+        eid_raw = mapid[i]
+
+        # Skip NaN entries (forward node outside recon mesh)
+        if np.isnan(eid_raw):
+            continue
+
+        eid = int(eid_raw)
+
+        # Bounds check on element index
+        if eid < 0 or eid >= n_elem:
+            continue
+
+        # Get reconstruction mesh node indices for this element
+        node_ids = elem_0[eid, :]  # 4 node indices (0-based)
+
+        # Bounds check on node indices
+        if np.any(node_ids < 0) or np.any(node_ids >= nn_recon):
+            continue
+
+        # Distribute Jacobian contribution using barycentric weights
+        for j in range(4):
+            node_idx = node_ids[j]
+            J_new[:, node_idx] += J[:, i] * mapweight[i, j]
 
     return J_new
 

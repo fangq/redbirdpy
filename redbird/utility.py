@@ -407,29 +407,65 @@ def meshinterp(
     elem: np.ndarray,
     default: np.ndarray = None,
 ) -> np.ndarray:
-    """Interpolate values between meshes using barycentric coordinates."""
-    # elem is 1-based, convert for numpy
+    """
+    Interpolate values between meshes using barycentric coordinates.
+
+    Parameters
+    ----------
+    values : ndarray
+        Values on source mesh nodes (Nn_source x Nval) or (Nn_source,)
+    mapid : ndarray
+        Element indices in source mesh for each target point (0-based)
+    mapweight : ndarray
+        Barycentric coordinates (Ntarget x 4)
+    elem : ndarray
+        Element connectivity of SOURCE mesh (1-based!)
+    default : ndarray, optional
+        Default values for points outside mesh
+
+    Returns
+    -------
+    result : ndarray
+        Interpolated values at target points
+    """
+    # elem is 1-based, convert for numpy indexing
     elem_0 = elem[:, :4].astype(int) - 1
     n_target = len(mapid)
 
-    if values.ndim == 1:
-        result = np.zeros(n_target) if default is None else default.copy()
+    # Handle 1D vs 2D values
+    values_2d = values[:, np.newaxis] if values.ndim == 1 else values
+    nval = values_2d.shape[1]
+
+    if default is None:
+        result = np.zeros((n_target, nval))
     else:
+        default_2d = default[:, np.newaxis] if default.ndim == 1 else default
         result = (
-            np.zeros((n_target, values.shape[1])) if default is None else default.copy()
+            default_2d.copy()
+            if default_2d.shape[0] == n_target
+            else np.zeros((n_target, nval))
         )
 
     for i in range(n_target):
         if not np.isnan(mapid[i]):
-            eid = int(mapid[i])  # mapid should be 0-based (from tsearchn)
-            if values.ndim == 1:
-                result[i] = np.sum(values[elem_0[eid, :]] * mapweight[i, :])
-            else:
-                result[i, :] = np.sum(
-                    values[elem_0[eid, :], :] * mapweight[i, :, np.newaxis], axis=0
-                )
+            eid = int(mapid[i])  # mapid is 0-based element index
 
-    return result
+            # Check bounds
+            if eid < 0 or eid >= elem_0.shape[0]:
+                continue
+
+            # Get node indices for this element
+            node_ids = elem_0[eid, :]  # 4 node indices (0-based)
+
+            # Check node indices are valid
+            if np.any(node_ids < 0) or np.any(node_ids >= values_2d.shape[0]):
+                continue
+
+            # Interpolate using barycentric coordinates
+            # values_at_nodes: (4, nval), mapweight[i, :]: (4,)
+            result[i, :] = mapweight[i, :] @ values_2d[node_ids, :]
+
+    return result.squeeze() if values.ndim == 1 else result
 
 
 # ============== Private Helper Functions ==============

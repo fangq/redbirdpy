@@ -13,12 +13,13 @@ This example demonstrates:
 
 import numpy as np
 import time
+import sys
+import os
 
-try:
-    import redbird as rb
-    from redbird import forward, recon, utility, property as prop_module
-except ImportError:
-    raise ImportError("redbird not installed")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import redbird as rb
+from redbird import forward, recon, utility, property as prop_module
 
 try:
     import iso2mesh as i2m
@@ -35,10 +36,14 @@ def create_target_mesh():
     s0 = [70, 50, 20]  # Inclusion center
 
     # Create bounding box
-    nobbx, fcbbx = i2m.meshabox([40, 0, 0], [160, 120, 60], 10)
+    nobbx, fcbbx, _ = i2m.meshabox([40, 0, 0], [160, 120, 60], 10)
 
     # Create spherical inclusion
-    nosp, fcsp = i2m.meshasphere(s0, 5, 1)
+    nosp, fcsp, _ = i2m.meshasphere(s0, 5, 1)
+
+    # Ensure face arrays have same number of columns (trim to 3 for triangles)
+    fcbbx = fcbbx[:, :3] if fcbbx.shape[1] > 3 else fcbbx
+    fcsp = fcsp[:, :3] if fcsp.shape[1] > 3 else fcsp
 
     # Merge meshes
     no, fc = i2m.mergemesh(nobbx, fcbbx, nosp, fcsp)
@@ -46,7 +51,7 @@ def create_target_mesh():
     # Generate tetrahedral mesh with region labels
     regionseed = np.array([[41, 1, 1], s0])  # Inside box  # Inside sphere
 
-    node, elem = i2m.s2m(no, fc[:, :3], 1, 40, "tetgen", regionseed)
+    node, elem, _ = i2m.s2m(no, fc[:, :3], 1, 40, "tetgen", regionseed)
 
     seg = (
         elem[:, 4].astype(int)

@@ -12,12 +12,13 @@ This example demonstrates:
 
 import numpy as np
 import time
+import sys
+import os
 
-try:
-    import redbird as rb
-    from redbird import forward, utility
-except ImportError:
-    raise ImportError("redbird not installed")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import redbird as rb
+from redbird import forward, utility
 
 try:
     import iso2mesh as i2m
@@ -39,14 +40,14 @@ def create_box_with_inclusion():
     t_start = time.time()
 
     # Create outer box
-    nbox1, fbox1 = i2m.meshabox([0, 0, 0], boxsize, trisize)
+    nbox1, fbox1, _ = i2m.meshabox([0, 0, 0], boxsize, trisize)
 
     # Create inner box (inclusion)
-    nbox2, fbox2 = i2m.meshabox([10, 10, 10], [30, 30, 30], trisize)
+    nbox2, fbox2, _ = i2m.meshabox([10, 10, 10], [30, 30, 30], trisize)
 
     # Clean isolated nodes
-    nbox1, fbox1 = i2m.removeisolatednode(nbox1, fbox1[:, :3])
-    nbox2, fbox2 = i2m.removeisolatednode(nbox2, fbox2[:, :3])
+    nbox1, fbox1, _ = i2m.removeisolatednode(nbox1, fbox1[:, :3])
+    nbox2, fbox2, _ = i2m.removeisolatednode(nbox2, fbox2[:, :3])
 
     # Merge meshes
     no1, fc1 = i2m.mergemesh(nbox1, fbox1, nbox2, fbox2)
@@ -60,7 +61,7 @@ def create_box_with_inclusion():
     )
 
     # Generate tetrahedral mesh
-    node, elem = i2m.s2m(no1, fc1, 1, maxvol, "tetgen", regionseed)
+    node, elem, _ = i2m.s2m(no1, fc1, 1, maxvol, "tetgen", regionseed)
 
     print(f"  Mesh creation time: {time.time() - t_start:.4f} s")
     print(f"  Nodes: {node.shape[0]}, Elements: {elem.shape[0]}")
@@ -186,7 +187,7 @@ def run_layered_example():
 
     # Create a 3-layer z-lattice
     no1, fc1, regionseeds = i2m.latticegrid([0, 60], [0, 50], [0, 5, 10, 30])
-    node, elem = i2m.s2m(no1, fc1, 1, maxvol, "tetgen", regionseeds)
+    node, elem, _ = i2m.s2m(no1, fc1, 1, maxvol, "tetgen", regionseeds)
 
     # Extract segmentation
     seg = (
