@@ -1,7 +1,7 @@
 """
 Redbird - Python toolbox for Diffuse Optical Tomography
 
-A Python translation of the Redbird-m MATLAB toolbox for forward and inverse
+A Python translation of the Redbird MATLAB toolbox for forward and inverse
 modeling of diffuse optical tomography (DOT) and near-infrared spectroscopy (NIRS).
 
 This toolbox provides:
@@ -48,7 +48,7 @@ cfg, sd = rb.utility.meshprep(cfg)
 detval, phi = rb.forward.runforward(cfg)
 
 
-Author: Translated from Redbird-m MATLAB toolbox by Qianqian Fang (q.fang <at> neu.edu)
+Author: Translated from Redbird MATLAB toolbox by Qianqian Fang (q.fang <at> neu.edu)
 License: GPL version 3
 """
 

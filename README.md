@@ -1,6 +1,6 @@
 # Redbird - Python Toolbox for Diffuse Optical Imaging
 
-A Python translation of the [Redbird-m](https://github.com/fangq/redbird) MATLAB toolbox for forward and inverse modeling of diffuse optical tomography (DOT) and near-infrared spectroscopy (NIRS).
+A Python translation of the [Redbird](https://github.com/fangq/redbird) MATLAB toolbox for forward and inverse modeling of diffuse optical tomography (DOT) and near-infrared spectroscopy (NIRS).
 
 ## Overview
 
@@ -199,4 +199,4 @@ GPL version 3 - see LICENSE file for details.
 ## Author
 
 Original MATLAB toolbox by Qianqian Fang (q.fang@neu.edu)  
-Python translation based on Redbird-m
+Python translation based on Redbird
