@@ -9,29 +9,27 @@ Functions:
     runforward: Main forward solver for all sources/wavelengths
     femlhs: Build FEM left-hand-side (stiffness) matrix
     femrhs: Build FEM right-hand-side vector
-    femsolve: Solve linear system with various methods
     femgetdet: Extract detector values from forward solution
     deldotdel: Compute gradient dot product operator
     jac: Compute Jacobian matrices using adjoint method
 """
-"""
-Redbird Forward Module - FEM-based forward modeling for diffuse optics.
 
-OPTIMIZED VERSION - Preserves original algorithm, optimizes implementation:
-1. LU factorization reuse for multiple RHS
-2. Vectorized Jacobian computation  
-3. Bounding box acceleration for point location
-4. Pre-allocated arrays for sparse matrix assembly
-
-INDEX CONVENTION: All mesh indices (elem, face) stored in cfg are 1-based
-to match MATLAB/iso2mesh. This module converts to 0-based internally.
-"""
+__all__ = [
+    "runforward",
+    "deldotdel",
+    "femlhs",
+    "femrhs",
+    "femgetdet",
+    "jac",
+    "jacchrome",
+]
 
 import numpy as np
 from scipy import sparse
-from scipy.sparse.linalg import spsolve, cg, gmres, bicgstab, splu
 from typing import Dict, Tuple, Optional, Union, List, Any
-import warnings
+
+# Import solver functions from solver module
+from .solver import femsolve
 
 # Speed of light in mm/s
 C0 = 299792458000.0
@@ -70,7 +68,7 @@ def runforward(cfg: dict, **kwargs) -> Tuple[Any, Any]:
         for md in rfcw:
             rhs, loc, bary, optode = femrhs(cfg, sd, wv, md)
             Amat[wv] = femlhs(cfg, cfg["deldotdel"], wv, md)
-            phi_sol, flag = femsolve(Amat[wv], rhs, **solverflag)
+            phi_sol, flag = femsolve(Amat[wv], rhs, **kwargs)
             phi_out[md]["phi"][wv] = phi_sol
             detval = femgetdet(phi_sol, cfg, loc, bary)
             detval_out[md]["detphi"][wv] = detval
@@ -439,77 +437,6 @@ def _compute_bary(tet_nodes: np.ndarray, point: np.ndarray) -> Optional[np.ndarr
         return None
 
 
-def femsolve(
-    Amat: sparse.spmatrix,
-    rhs: Union[np.ndarray, sparse.spmatrix],
-    method: str = "direct",
-    **kwargs,
-) -> Tuple[np.ndarray, int]:
-    """
-    Solve FEM linear system A*x = b.
-    Uses LU factorization for multiple RHS columns (major speedup).
-    """
-    if sparse.issparse(rhs):
-        rhs = rhs.toarray()
-
-    if rhs.ndim == 1:
-        rhs = rhs.reshape(-1, 1)
-
-    ncol = rhs.shape[1]
-    dtype = complex if np.iscomplexobj(Amat) or np.iscomplexobj(rhs) else float
-    x = np.zeros((Amat.shape[0], ncol), dtype=dtype)
-    flag = 0
-
-    tol = kwargs.get("tol", 1e-10)
-    maxiter = kwargs.get("maxiter", 1000)
-
-    if method == "direct" or method == "mldivide":
-        # Use LU factorization for efficiency with multiple RHS
-        if ncol > 1:
-            try:
-                lu = splu(Amat.tocsc())
-                for i in range(ncol):
-                    if np.any(rhs[:, i] != 0):
-                        x[:, i] = lu.solve(rhs[:, i])
-            except Exception:
-                # Fallback to spsolve if LU fails
-                for i in range(ncol):
-                    if np.any(rhs[:, i] != 0):
-                        x[:, i] = spsolve(Amat, rhs[:, i])
-        else:
-            for i in range(ncol):
-                if np.any(rhs[:, i] != 0):
-                    x[:, i] = spsolve(Amat, rhs[:, i])
-    elif method == "cg":
-        for i in range(ncol):
-            if np.any(rhs[:, i] != 0):
-                try:
-                    x[:, i], info = cg(Amat, rhs[:, i], rtol=tol, maxiter=maxiter)
-                except TypeError:
-                    x[:, i], info = cg(Amat, rhs[:, i], tol=tol, maxiter=maxiter)
-                flag = max(flag, info)
-    elif method == "gmres":
-        for i in range(ncol):
-            if np.any(rhs[:, i] != 0):
-                try:
-                    x[:, i], info = gmres(Amat, rhs[:, i], rtol=tol, maxiter=maxiter)
-                except TypeError:
-                    x[:, i], info = gmres(Amat, rhs[:, i], tol=tol, maxiter=maxiter)
-                flag = max(flag, info)
-    elif method == "bicgstab":
-        for i in range(ncol):
-            if np.any(rhs[:, i] != 0):
-                try:
-                    x[:, i], info = bicgstab(Amat, rhs[:, i], rtol=tol, maxiter=maxiter)
-                except TypeError:
-                    x[:, i], info = bicgstab(Amat, rhs[:, i], tol=tol, maxiter=maxiter)
-                flag = max(flag, info)
-    else:
-        raise ValueError(f"Unknown solver method: {method}")
-
-    return x, flag
-
-
 def femgetdet(
     phi: np.ndarray, cfg: dict, loc: np.ndarray, bary: np.ndarray
 ) -> np.ndarray:
@@ -579,7 +506,6 @@ def jac(
 
     for batch_start in range(0, nelem, batch_size):
         batch_end = min(batch_start + batch_size, nelem)
-        batch_elems = range(batch_start, batch_end)
         batch_elem_0 = elem_0[batch_start:batch_end, :]
         batch_evol = evol[batch_start:batch_end]
 

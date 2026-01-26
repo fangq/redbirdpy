@@ -13,6 +13,15 @@ Functions:
     setmesh: Associate new mesh with simulation structure
 """
 
+__all__ = [
+    "extinction",
+    "updateprop",
+    "getbulk",
+    "musp2sasp",
+    "setmesh",
+    "get_chromophore_table",
+]
+
 import numpy as np
 from scipy import interpolate
 from typing import Dict, Tuple, Optional, Union, List, Any

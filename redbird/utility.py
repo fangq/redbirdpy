@@ -8,6 +8,20 @@ This module provides utility functions for mesh preparation, source/detector
 handling, data manipulation, and visualization support.
 """
 
+__all__ = [
+    "meshprep",
+    "sdmap",
+    "getoptodes",
+    "getdistance",
+    "getltr",
+    "getreff",
+    "elem2node",
+    "addnoise",
+    "meshinterp",
+    "HAS_ISO2MESH",
+    "forcearray",
+]
+
 import numpy as np
 from scipy import sparse
 from typing import Dict, Tuple, Optional, Union, List, Any
@@ -32,6 +46,24 @@ def meshprep(cfg: dict) -> Tuple[dict, np.ndarray]:
     All mesh indices (elem, face) remain 1-based in the returned cfg.
     """
     from . import forward, property as prop_module
+
+    # Convert list inputs to numpy arrays
+    cfg = forcearray(
+        cfg,
+        [
+            "node",
+            "elem",
+            "face",
+            "srcpos",
+            "srcdir",
+            "detpos",
+            "detdir",
+            "prop",
+            "seg",
+            "widesrc",
+            "widedet",
+        ],
+    )
 
     if "node" not in cfg or "elem" not in cfg:
         raise ValueError("cfg must contain 'node' and 'elem'")
@@ -588,3 +620,11 @@ def _elemvolume_fallback(node: np.ndarray, elem: np.ndarray) -> np.ndarray:
         raise ValueError(f"Unsupported element type with {elem.shape[1]} nodes")
 
     return vol
+
+
+def forcearray(cfg: dict, keys: List[str]) -> dict:
+    """Convert list-valued cfg entries to numpy arrays."""
+    for key in keys:
+        if key in cfg and isinstance(cfg[key], list):
+            cfg[key] = np.array(cfg[key])
+    return cfg

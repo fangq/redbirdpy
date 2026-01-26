@@ -25,25 +25,28 @@ Dependencies:
     - iso2mesh (pyiso2mesh): https://github.com/NeuroJSON/pyiso2mesh
 
 Example:
-    >>> import redbird as rb
-    >>> from iso2mesh import meshabox
-    >>> 
-    >>> # Create mesh using iso2mesh (returns 1-based indices)
-    >>> node, face, elem = meshabox([0,0,0], [60,60,30], 5)
-    >>> 
-    >>> cfg = {
-    ...     'node': node,
-    ...     'elem': elem,
-    ...     'prop': np.array([[0,0,1,1], [0.01, 1, 0, 1.37]]),
-    ...     'srcpos': np.array([[30, 30, 0]]),
-    ...     'srcdir': np.array([[0, 0, 1]]),
-    ...     'detpos': np.array([[30, 40, 0]]),
-    ...     'detdir': np.array([[0, 0, 1]]),
-    ...     'seg': np.ones(elem.shape[0]),
-    ...     'omega': 0
-    ... }
-    >>> cfg, sd = rb.utility.meshprep(cfg)
-    >>> detval, phi = rb.forward.runforward(cfg)
+
+import redbird as rb
+import numpy as np
+from iso2mesh import meshabox
+
+# Create mesh using iso2mesh (returns 1-based indices)
+node, face, elem = meshabox([0,0,0], [60,60,30], 5)
+
+cfg = {
+     'node': node,
+     'elem': elem,
+     'prop': [[0,0,1,1], [0.01, 1, 0, 1.37]],
+     'srcpos': [30, 30, 0],
+     'srcdir': [0, 0, 1],
+     'detpos': [30, 40, 0],
+     'detdir': [0, 0, 1],
+     'seg': elem.shape[0],
+     'omega': 0
+}
+cfg, sd = rb.utility.meshprep(cfg)
+detval, phi = rb.forward.runforward(cfg)
+
 
 Author: Translated from Redbird-m MATLAB toolbox by Qianqian Fang (q.fang <at> neu.edu)
 License: GPL version 3
@@ -56,12 +59,24 @@ from . import forward
 from . import recon
 from . import utility
 from . import property
+from . import solver
 
-# Convenience imports for common functions
-from .forward import runforward, femsolve, femlhs, femrhs
-from .recon import runrecon, reginv
-from .utility import meshprep, sdmap, getoptodes
-from .property import extinction, updateprop, getbulk
+# Re-export all public functions from submodules
+from .forward import *
+from .recon import *
+from .utility import *
+from .property import *
+from .solver import *
+
+# Combine all exports
+__all__ = (
+    forward.__all__
+    + solver.__all__
+    + recon.__all__
+    + utility.__all__
+    + property.__all__
+    + ["run", "forward", "recon", "utility", "property", "solver"]
+)
 
 # Main entry point (similar to rbrun in MATLAB)
 def run(cfg, recon_cfg=None, detphi0=None, sd=None, **kwargs):
@@ -89,8 +104,8 @@ def run(cfg, recon_cfg=None, detphi0=None, sd=None, **kwargs):
     Results from runforward (if forward only) or runrecon (if reconstruction)
     """
     if recon_cfg is None:
-        return forward.runforward(cfg, **kwargs)
+        return runforward(cfg, **kwargs)
     else:
         if detphi0 is None:
             raise ValueError("detphi0 is required for reconstruction")
-        return recon.runrecon(cfg, recon_cfg, detphi0, sd, **kwargs)
+        return runrecon(cfg, recon_cfg, detphi0, sd, **kwargs)

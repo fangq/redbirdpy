@@ -1,6 +1,6 @@
 # Redbird - Python Toolbox for Diffuse Optical Imaging
 
-A Python translation of the [Redbird-m](https://github.com/fangq/redbird-m) MATLAB toolbox for forward and inverse modeling of diffuse optical tomography (DOT) and near-infrared spectroscopy (NIRS).
+A Python translation of the [Redbird-m](https://github.com/fangq/redbird) MATLAB toolbox for forward and inverse modeling of diffuse optical tomography (DOT) and near-infrared spectroscopy (NIRS).
 
 ## Overview
 
@@ -18,7 +18,7 @@ Redbird provides a complete framework for simulating light propagation in biolog
 pip install numpy scipy
 
 # Optional: for mesh generation
-pip install iso2mesh  # or install from https://github.com/fangq/iso2mesh
+pip install iso2mesh  # or install from https://github.com/NeuroJSON/pyiso2mesh
 ```
 
 Place the `redbird` folder in your Python path or project directory.

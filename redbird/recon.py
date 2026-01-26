@@ -14,6 +14,17 @@ Functions:
     prior: Generate structure-prior regularization matrices
 """
 
+__all__ = [
+    "runrecon",
+    "reginv",
+    "reginvover",
+    "reginvunder",
+    "matreform",
+    "matflat",
+    "prior",
+    "syncprop",
+]
+
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import spsolve
