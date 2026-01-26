@@ -95,7 +95,7 @@ except ImportError:
 
 
 # =============================================================================
-# Parallel BLQMR Helper Functions
+# Parallel Solver Helper Functions
 # =============================================================================
 
 
@@ -144,6 +144,63 @@ def _solve_blqmr_batch(args):
     return batch_id, start_col, x_batch, result.flag, result.iter, result.relres
 
 
+def _solve_iterative_column(args):
+    """
+    Worker function for parallel iterative solving (gmres, bicgstab, cg).
+
+    Solves a single RHS column using the specified iterative method.
+    """
+    (
+        A_data,
+        A_indices,
+        A_indptr,
+        A_shape,
+        A_dtype,
+        rhs_col,
+        col_idx,
+        solver_type,
+        tol,
+        maxiter,
+        use_amg,
+    ) = args
+
+    from scipy.sparse.linalg import gmres, bicgstab, cg
+    from scipy import sparse
+
+    # Reconstruct sparse matrix in worker process
+    A = sparse.csc_matrix((A_data, A_indices, A_indptr), shape=A_shape, dtype=A_dtype)
+
+    # Setup preconditioner if AMG requested
+    M = None
+    if use_amg and solver_type == "cg":
+        try:
+            import pyamg
+
+            ml = pyamg.smoothed_aggregation_solver(A.tocsr())
+            M = ml.aspreconditioner()
+        except ImportError:
+            pass
+
+    # Select solver
+    if solver_type == "gmres":
+        solver_func = gmres
+    elif solver_type == "bicgstab":
+        solver_func = bicgstab
+    elif solver_type == "cg":
+        solver_func = cg
+    else:
+        raise ValueError(f"Unknown solver type: {solver_type}")
+
+    # Solve
+    try:
+        x_col, info = solver_func(A, rhs_col, M=M, rtol=tol, maxiter=maxiter)
+    except TypeError:
+        # Older scipy versions use 'tol' instead of 'rtol'
+        x_col, info = solver_func(A, rhs_col, M=M, tol=tol, maxiter=maxiter)
+
+    return col_idx, x_col, info
+
+
 def _blqmr_parallel(
     Amat: sparse.spmatrix,
     rhs: np.ndarray,
@@ -153,39 +210,11 @@ def _blqmr_parallel(
     rhsblock: int,
     use_precond: bool,
     droptol: float,
-    nworkers: int,
+    nthread: int,
     verbose: bool,
 ) -> Tuple[np.ndarray, int]:
     """
     Solve BLQMR with multiple RHS in parallel using multiprocessing.
-
-    Parameters
-    ----------
-    Amat : sparse matrix
-        System matrix
-    rhs : ndarray
-        Right-hand side matrix (n x ncol)
-    tol : float
-        Convergence tolerance
-    maxiter : int
-        Maximum iterations
-    rhsblock : int
-        Number of RHS columns per batch
-    use_precond : bool
-        Whether to use preconditioning
-    droptol : float
-        Drop tolerance for ILU preconditioner
-    nworkers : int
-        Number of parallel workers (processes)
-    verbose : bool
-        Print progress
-
-    Returns
-    -------
-    x : ndarray
-        Solution matrix
-    flag : int
-        Maximum flag from all batches (0 = all converged)
     """
     n, ncol = rhs.shape
 
@@ -205,9 +234,7 @@ def _blqmr_parallel(
     batches = []
     for batch_id, start in enumerate(range(0, ncol, rhsblock)):
         end = min(start + rhsblock, ncol)
-        rhs_batch = np.ascontiguousarray(
-            rhs[:, start:end]
-        )  # Ensure contiguous for pickling
+        rhs_batch = np.ascontiguousarray(rhs[:, start:end])
         batches.append(
             (
                 A_data,
@@ -229,13 +256,11 @@ def _blqmr_parallel(
     x = np.zeros((n, ncol), dtype=out_dtype)
     max_flag = 0
 
-    # Use ProcessPoolExecutor for true parallelism (bypasses GIL)
-    with ProcessPoolExecutor(max_workers=nworkers) as executor:
+    with ProcessPoolExecutor(max_workers=nthread) as executor:
         results = executor.map(_solve_blqmr_batch, batches)
 
         for batch_id, start_col, x_batch, batch_flag, niter, relres in results:
             end_col = start_col + x_batch.shape[1]
-            # Ensure proper dtype assignment
             if is_complex and not np.iscomplexobj(x_batch):
                 x[:, start_col:end_col] = x_batch.astype(out_dtype)
             else:
@@ -247,6 +272,74 @@ def _blqmr_parallel(
                     f"blqmr [{start_col+1}:{end_col}] (worker {batch_id}): "
                     f"iter={niter}, relres={relres:.2e}, flag={batch_flag}"
                 )
+
+    return x, max_flag
+
+
+def _iterative_parallel(
+    Amat: sparse.spmatrix,
+    rhs: np.ndarray,
+    solver_type: str,
+    *,
+    tol: float,
+    maxiter: int,
+    nthread: int,
+    use_amg: bool = False,
+    verbose: bool = False,
+) -> Tuple[np.ndarray, int]:
+    """
+    Solve iterative methods (gmres, bicgstab, cg) in parallel.
+
+    Each RHS column is solved independently in a separate process.
+    """
+    n, ncol = rhs.shape
+
+    is_complex = np.iscomplexobj(Amat) or np.iscomplexobj(rhs)
+    out_dtype = np.complex128 if is_complex else np.float64
+
+    # Convert matrix to CSC for serialization
+    Acsc = Amat.tocsc()
+    A_data = Acsc.data
+    A_indices = Acsc.indices
+    A_indptr = Acsc.indptr
+    A_shape = Acsc.shape
+    A_dtype = Acsc.dtype
+
+    # Prepare tasks - one per non-zero RHS column
+    tasks = []
+    for i in range(ncol):
+        if np.any(rhs[:, i] != 0):
+            rhs_col = np.ascontiguousarray(rhs[:, i])
+            tasks.append(
+                (
+                    A_data,
+                    A_indices,
+                    A_indptr,
+                    A_shape,
+                    A_dtype,
+                    rhs_col,
+                    i,
+                    solver_type,
+                    tol,
+                    maxiter,
+                    use_amg,
+                )
+            )
+
+    # Solve in parallel
+    x = np.zeros((n, ncol), dtype=out_dtype)
+    max_flag = 0
+
+    with ProcessPoolExecutor(max_workers=nthread) as executor:
+        results = executor.map(_solve_iterative_column, tasks)
+
+        for col_idx, x_col, info in results:
+            x[:, col_idx] = x_col
+            max_flag = max(max_flag, info)
+
+            if verbose:
+                status = "converged" if info == 0 else f"flag={info}"
+                print(f"{solver_type} [col {col_idx+1}]: {status}")
 
     return x, max_flag
 
@@ -287,10 +380,12 @@ def femsolve(
         tol : float - convergence tolerance (default: 1e-10)
         maxiter : int - maximum iterations (default: 1000)
         rhsblock : int - block size for blqmr (default: 8)
-        nworkers : int - number of parallel workers for blqmr (default: 1)
+        nthread : int - parallel workers for iterative solvers
+            (default: min(ncol, cpu_count), set to 1 to disable)
+            Supported by: blqmr, gmres, bicgstab, cg, cg+amg
         verbose : bool - print solver progress (default: False)
         spd : bool - True if matrix is symmetric positive definite
-        M, M1, M2 : preconditioners
+        M, M1, M2 : preconditioners (disables parallel for gmres/bicgstab/cg)
         x0 : initial guess
         workspace : BLQMRWorkspace for blqmr
         use_precond : bool - use automatic preconditioning for blqmr (default: True)
@@ -323,10 +418,13 @@ def femsolve(
 
     def get_direct_solver_for_matrix():
         """Get best direct solver for current matrix type."""
-        if _pardiso_solve:
+        # Pardiso is fastest and now supports complex (via real-valued formulation)
+        if _DIRECT_SOLVER == "pardiso":
             return "pardiso"
+        # For complex matrices without Pardiso, prefer UMFPACK
         if is_complex:
             return "umfpack" if _HAS_UMFPACK else "superlu"
+        # For real matrices, use best available
         return _DIRECT_SOLVER
 
     # Auto-select solver
@@ -462,7 +560,9 @@ def femsolve(
         workspace = kwargs.get("workspace", None)
         use_precond = kwargs.get("use_precond", True)
         droptol = kwargs.get("droptol", 0.001)
-        nworkers = kwargs.get("nworkers", 1)
+        nthread = kwargs.get("nthread", None)
+        if nthread is None:
+            nthread = min(ncol, multiprocessing.cpu_count())
 
         if rhsblock <= 0 or ncol <= rhsblock:
             # Single batch - no parallelization needed
@@ -485,7 +585,7 @@ def femsolve(
                     f"blqmr: iter={result.iter}, relres={result.relres:.2e}, "
                     f"flag={flag}, BLQMR_EXT={BLQMR_EXT}"
                 )
-        elif nworkers > 1:
+        elif nthread > 1:
             # Parallel batch solving using multiprocessing
             x, flag = _blqmr_parallel(
                 Amat,
@@ -495,7 +595,7 @@ def femsolve(
                 rhsblock=rhsblock,
                 use_precond=use_precond,
                 droptol=droptol,
-                nworkers=nworkers,
+                nthread=nthread,
                 verbose=verbose,
             )
         else:
@@ -537,58 +637,150 @@ def femsolve(
             warnings.warn("cg+amg doesn't support complex, falling back to gmres")
             return femsolve(Amat, rhs, method="gmres", **kwargs)
 
-        ml = _pyamg.smoothed_aggregation_solver(Amat.tocsr())
-        M = ml.aspreconditioner()
+        nthread = kwargs.get("nthread", None)
+        if nthread is None:
+            nthread = min(ncol, multiprocessing.cpu_count())
 
-        for i in range(ncol):
-            if np.any(rhs[:, i] != 0):
-                try:
-                    x[:, i], info = cg(Amat, rhs[:, i], M=M, rtol=tol, maxiter=maxiter)
-                except TypeError:
-                    x[:, i], info = cg(Amat, rhs[:, i], M=M, tol=tol, maxiter=maxiter)
-                flag = max(flag, info)
+        if nthread > 1 and ncol > 1:
+            # Parallel solving
+            x, flag = _iterative_parallel(
+                Amat,
+                rhs,
+                "cg",
+                tol=tol,
+                maxiter=maxiter,
+                nthread=nthread,
+                use_amg=True,
+                verbose=verbose,
+            )
+        else:
+            # Sequential solving
+            ml = _pyamg.smoothed_aggregation_solver(Amat.tocsr())
+            M = ml.aspreconditioner()
+
+            for i in range(ncol):
+                if np.any(rhs[:, i] != 0):
+                    try:
+                        x[:, i], info = cg(
+                            Amat, rhs[:, i], M=M, rtol=tol, maxiter=maxiter
+                        )
+                    except TypeError:
+                        x[:, i], info = cg(
+                            Amat, rhs[:, i], M=M, tol=tol, maxiter=maxiter
+                        )
+                    flag = max(flag, info)
+                    if verbose:
+                        status = "converged" if info == 0 else f"flag={info}"
+                        print(f"cg+amg [col {i+1}]: {status}")
 
     elif method == "cg":
         if is_complex:
             warnings.warn("cg requires Hermitian matrix, falling back to gmres")
             return femsolve(Amat, rhs, method="gmres", **kwargs)
 
+        nthread = kwargs.get("nthread", None)
+        if nthread is None:
+            nthread = min(ncol, multiprocessing.cpu_count())
         M = kwargs.get("M", None)
-        for i in range(ncol):
-            if np.any(rhs[:, i] != 0):
-                try:
-                    x[:, i], info = cg(Amat, rhs[:, i], M=M, rtol=tol, maxiter=maxiter)
-                except TypeError:
-                    x[:, i], info = cg(Amat, rhs[:, i], M=M, tol=tol, maxiter=maxiter)
-                flag = max(flag, info)
+
+        if nthread > 1 and ncol > 1 and M is None:
+            # Parallel solving (without custom preconditioner)
+            x, flag = _iterative_parallel(
+                Amat,
+                rhs,
+                "cg",
+                tol=tol,
+                maxiter=maxiter,
+                nthread=nthread,
+                use_amg=False,
+                verbose=verbose,
+            )
+        else:
+            # Sequential solving
+            for i in range(ncol):
+                if np.any(rhs[:, i] != 0):
+                    try:
+                        x[:, i], info = cg(
+                            Amat, rhs[:, i], M=M, rtol=tol, maxiter=maxiter
+                        )
+                    except TypeError:
+                        x[:, i], info = cg(
+                            Amat, rhs[:, i], M=M, tol=tol, maxiter=maxiter
+                        )
+                    flag = max(flag, info)
+                    if verbose:
+                        status = "converged" if info == 0 else f"flag={info}"
+                        print(f"cg [col {i+1}]: {status}")
 
     elif method == "gmres":
+        nthread = kwargs.get("nthread", None)
+        if nthread is None:
+            nthread = min(ncol, multiprocessing.cpu_count())
         M = kwargs.get("M", None)
-        for i in range(ncol):
-            if np.any(rhs[:, i] != 0):
-                try:
-                    x[:, i], info = gmres(
-                        Amat, rhs[:, i], M=M, rtol=tol, maxiter=maxiter
-                    )
-                except TypeError:
-                    x[:, i], info = gmres(
-                        Amat, rhs[:, i], M=M, tol=tol, maxiter=maxiter
-                    )
-                flag = max(flag, info)
+
+        if nthread > 1 and ncol > 1 and M is None:
+            # Parallel solving (without custom preconditioner)
+            x, flag = _iterative_parallel(
+                Amat,
+                rhs,
+                "gmres",
+                tol=tol,
+                maxiter=maxiter,
+                nthread=nthread,
+                use_amg=False,
+                verbose=verbose,
+            )
+        else:
+            # Sequential solving
+            for i in range(ncol):
+                if np.any(rhs[:, i] != 0):
+                    try:
+                        x[:, i], info = gmres(
+                            Amat, rhs[:, i], M=M, rtol=tol, maxiter=maxiter
+                        )
+                    except TypeError:
+                        x[:, i], info = gmres(
+                            Amat, rhs[:, i], M=M, tol=tol, maxiter=maxiter
+                        )
+                    flag = max(flag, info)
+                    if verbose:
+                        status = "converged" if info == 0 else f"flag={info}"
+                        print(f"gmres [col {i+1}]: {status}")
 
     elif method == "bicgstab":
+        nthread = kwargs.get("nthread", None)
+        if nthread is None:
+            nthread = min(ncol, multiprocessing.cpu_count())
         M = kwargs.get("M", None)
-        for i in range(ncol):
-            if np.any(rhs[:, i] != 0):
-                try:
-                    x[:, i], info = bicgstab(
-                        Amat, rhs[:, i], M=M, rtol=tol, maxiter=maxiter
-                    )
-                except TypeError:
-                    x[:, i], info = bicgstab(
-                        Amat, rhs[:, i], M=M, tol=tol, maxiter=maxiter
-                    )
-                flag = max(flag, info)
+
+        if nthread > 1 and ncol > 1 and M is None:
+            # Parallel solving (without custom preconditioner)
+            x, flag = _iterative_parallel(
+                Amat,
+                rhs,
+                "bicgstab",
+                tol=tol,
+                maxiter=maxiter,
+                nthread=nthread,
+                use_amg=False,
+                verbose=verbose,
+            )
+        else:
+            # Sequential solving
+            for i in range(ncol):
+                if np.any(rhs[:, i] != 0):
+                    try:
+                        x[:, i], info = bicgstab(
+                            Amat, rhs[:, i], M=M, rtol=tol, maxiter=maxiter
+                        )
+                    except TypeError:
+                        x[:, i], info = bicgstab(
+                            Amat, rhs[:, i], M=M, tol=tol, maxiter=maxiter
+                        )
+                    flag = max(flag, info)
+                    if verbose:
+                        status = "converged" if info == 0 else f"flag={info}"
+                        print(f"bicgstab [col {i+1}]: {status}")
 
     else:
         raise ValueError(f"Unknown solver: {method}")

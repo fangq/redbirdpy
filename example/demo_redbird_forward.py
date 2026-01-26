@@ -30,7 +30,7 @@ import redbird as rb
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 # Create mesh
-node, face, elem = meshabox([40, 0, 0], [160, 120, 60], 3)
+node, face, elem = meshabox([40, 0, 0], [160, 120, 60], 10)
 
 # Create source/detector grid
 xi, yi = np.meshgrid(np.arange(60, 141, 20), np.arange(20, 101, 20))
