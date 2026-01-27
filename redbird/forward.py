@@ -471,23 +471,76 @@ def femgetdet(
     return detval
 
 
-def jac(
-    sd: np.ndarray,
-    phi: np.ndarray,
-    deldotdel_mat: np.ndarray,
-    elem: np.ndarray,
-    evol: np.ndarray,
-    iselem: bool = False,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Build Jacobian matrices using adjoint method.
-    Optimized but preserving original algorithm.
-    """
+try:
+    from numba import njit, prange
+
+    HAS_NUMBA = True
+    print("Using Numba for Jacobian acceleration")
+except ImportError:
+    HAS_NUMBA = False
+    print("Numba not available")
+
+if HAS_NUMBA:
+
+    @njit(parallel=True, cache=True)
+    def _jac_core(phi, elem_0, evol, src_cols, det_cols):
+        """Numba-accelerated Jacobian core computation."""
+        nelem = elem_0.shape[0]
+        nsd = len(src_cols)
+        Jmua_elem = np.zeros((nsd, nelem))
+
+        for isd in prange(nsd):
+            src_col = src_cols[isd]
+            det_col = det_cols[isd]
+
+            for ie in range(nelem):
+                n0, n1, n2, n3 = (
+                    elem_0[ie, 0],
+                    elem_0[ie, 1],
+                    elem_0[ie, 2],
+                    elem_0[ie, 3],
+                )
+
+                ps0, ps1, ps2, ps3 = (
+                    phi[n0, src_col],
+                    phi[n1, src_col],
+                    phi[n2, src_col],
+                    phi[n3, src_col],
+                )
+                pd0, pd1, pd2, pd3 = (
+                    phi[n0, det_col],
+                    phi[n1, det_col],
+                    phi[n2, det_col],
+                    phi[n3, det_col],
+                )
+
+                diag_sum = ps0 * pd0 + ps1 * pd1 + ps2 * pd2 + ps3 * pd3
+                cross_sum = (
+                    ps0 * pd1
+                    + ps1 * pd0
+                    + ps0 * pd2
+                    + ps2 * pd0
+                    + ps0 * pd3
+                    + ps3 * pd0
+                    + ps1 * pd2
+                    + ps2 * pd1
+                    + ps1 * pd3
+                    + ps3 * pd1
+                    + ps2 * pd3
+                    + ps3 * pd2
+                )
+
+                Jmua_elem[isd, ie] = -(diag_sum + cross_sum * 0.5) * 0.1 * evol[ie]
+
+        return Jmua_elem
+
+
+def jac(sd, phi, deldotdel_mat, elem, evol, iselem=False):
+    """Build Jacobian matrices - Numba accelerated if available."""
     elem_0 = elem[:, :4].astype(np.int32) - 1
     nelem = elem_0.shape[0]
     nn = phi.shape[0]
 
-    # Get active source-detector pairs
     if sd.shape[1] >= 3:
         active = sd[:, 2] == 1
         sd_active = sd[active, :2].astype(np.int32)
@@ -498,60 +551,50 @@ def jac(
     src_cols = sd_active[:, 0]
     det_cols = sd_active[:, 1]
 
-    Jmua_node = np.zeros((nsd, nn), dtype=phi.dtype)
-    Jmua_elem = np.zeros((nsd, nelem), dtype=phi.dtype)
-
-    # Process elements in batches for memory efficiency
-    batch_size = min(1000, nelem)
-
-    for batch_start in range(0, nelem, batch_size):
-        batch_end = min(batch_start + batch_size, nelem)
-        batch_elem_0 = elem_0[batch_start:batch_end, :]
-        batch_evol = evol[batch_start:batch_end]
-
-        # Get phi at batch element nodes: (batch_size, 4, ncols)
-        phi_at_nodes = phi[batch_elem_0, :]
-
-        # Extract for sources and detectors: (batch_size, 4, nsd)
-        phi_src = phi_at_nodes[:, :, src_cols]
-        phi_det = phi_at_nodes[:, :, det_cols]
-
-        # Diagonal: sum of phi_src * phi_det over 4 nodes -> (batch_size, nsd)
-        phidotphi_diag = np.sum(phi_src * phi_det, axis=1)
-
-        # Off-diagonal terms
-        phidotphi_offdiag = (
-            phi_src[:, 0, :] * phi_det[:, 1, :]
-            + phi_src[:, 1, :] * phi_det[:, 0, :]
-            + phi_src[:, 0, :] * phi_det[:, 2, :]
-            + phi_src[:, 2, :] * phi_det[:, 0, :]
-            + phi_src[:, 0, :] * phi_det[:, 3, :]
-            + phi_src[:, 3, :] * phi_det[:, 0, :]
-            + phi_src[:, 1, :] * phi_det[:, 2, :]
-            + phi_src[:, 2, :] * phi_det[:, 1, :]
-            + phi_src[:, 1, :] * phi_det[:, 3, :]
-            + phi_src[:, 3, :] * phi_det[:, 1, :]
-            + phi_src[:, 2, :] * phi_det[:, 3, :]
-            + phi_src[:, 3, :] * phi_det[:, 2, :]
+    if HAS_NUMBA:
+        # Use Numba-accelerated version
+        Jmua_elem = _jac_core(
+            np.ascontiguousarray(phi), elem_0, evol, src_cols, det_cols
         )
+    else:
+        # Fallback to numpy loop
+        Jmua_elem = np.zeros((nsd, nelem), dtype=phi.dtype)
+        evol_scaled = 0.1 * evol
 
-        # Element Jacobian: (batch_size, nsd)
-        batch_Jmua_elem = (
-            -(phidotphi_diag * 0.1 + phidotphi_offdiag * 0.025)
-            * batch_evol[:, np.newaxis]
-        )
+        for isd in range(nsd):
+            src_col = src_cols[isd]
+            det_col = det_cols[isd]
 
-        # Store in Jmua_elem (transposed)
-        Jmua_elem[:, batch_start:batch_end] = batch_Jmua_elem.T
+            phi_src = phi[elem_0, src_col]
+            phi_det = phi[elem_0, det_col]
 
-        # Accumulate to nodes
-        for j in range(4):
-            np.add.at(Jmua_node.T, batch_elem_0[:, j], batch_Jmua_elem)
+            diag_sum = (phi_src * phi_det).sum(axis=1)
+            cross_sum = (
+                phi_src[:, 0] * phi_det[:, 1]
+                + phi_src[:, 1] * phi_det[:, 0]
+                + phi_src[:, 0] * phi_det[:, 2]
+                + phi_src[:, 2] * phi_det[:, 0]
+                + phi_src[:, 0] * phi_det[:, 3]
+                + phi_src[:, 3] * phi_det[:, 0]
+                + phi_src[:, 1] * phi_det[:, 2]
+                + phi_src[:, 2] * phi_det[:, 1]
+                + phi_src[:, 1] * phi_det[:, 3]
+                + phi_src[:, 3] * phi_det[:, 1]
+                + phi_src[:, 2] * phi_det[:, 3]
+                + phi_src[:, 3] * phi_det[:, 2]
+            )
+            Jmua_elem[isd, :] = -(diag_sum + cross_sum * 0.5) * evol_scaled
 
-    Jmua_node *= 0.25
+    # Accumulate to nodes using sparse matrix
+    from scipy import sparse
 
-    if iselem:
-        return Jmua_elem, Jmua_elem
+    rows = elem_0.ravel()
+    cols = np.repeat(np.arange(nelem), 4)
+    data = np.full(nelem * 4, 0.25)
+    P = sparse.csr_matrix((data, (rows, cols)), shape=(nn, nelem))
+
+    Jmua_node = (P @ Jmua_elem.T).T
+
     return Jmua_node, Jmua_elem
 
 

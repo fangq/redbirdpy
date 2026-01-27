@@ -131,11 +131,12 @@ def runrecon(
             sdwv = sd.get(wv, sd) if isinstance(sd, dict) else sd
             phiwv = phi.get(wv, phi) if isinstance(phi, dict) else phi
 
-            # jac expects 1-based elem, converts internally
             Jmua_n, Jmua_e = forward.jac(
                 sdwv, phiwv, cfg["deldotdel"], cfg["elem"], cfg["evol"]
             )
-            Jmua[wv] = Jmua_n
+            # Use "mua" as key for single-wavelength case
+            key = "mua" if wv == "" else wv
+            Jmua[key] = Jmua_n
 
         # Build chromophore Jacobians if multi-spectral
         if isinstance(cfg.get("prop"), dict) and "param" in cfg:
@@ -194,8 +195,12 @@ def runrecon(
                     _, Aregu["lir"] = qr(Aregu["lmat"])
                     Aregu["lir"] = np.linalg.inv(np.triu(Aregu["lir"]))
 
+        blockscale = 1.0 / np.sqrt(np.sum(Jflat**2))
+        Jflat = Jflat * blockscale
+
         # Solve inverse problem
         dmu = reginv(Jflat, misfit, lambda_, Aregu, blocks, **solverflag)
+        dmu = dmu * blockscale
 
         # Parse update and apply to recon structure
         update = {}
@@ -768,7 +773,7 @@ def _remap_jacobian(J: np.ndarray, recon: dict, cfg: dict) -> np.ndarray:
     J : ndarray
         Jacobian on forward mesh (Nsd x Nn_forward)
     recon : dict
-        Reconstruction structure with mapid (0-based), mapweight, elem (1-based)
+        Reconstruction structure with mapid (1-based), mapweight, elem (1-based)
     cfg : dict
         Forward structure
 
@@ -783,7 +788,7 @@ def _remap_jacobian(J: np.ndarray, recon: dict, cfg: dict) -> np.ndarray:
 
     J_new = np.zeros((nsd, nn_recon), dtype=J.dtype)
 
-    mapid = recon["mapid"]  # 0-based element indices into recon mesh
+    mapid = recon["mapid"]  # 1-based element indices into recon mesh
     mapweight = recon["mapweight"]  # Barycentric coordinates (Nn_forward x 4)
 
     # Convert 1-based elem to 0-based for numpy indexing
@@ -799,7 +804,7 @@ def _remap_jacobian(J: np.ndarray, recon: dict, cfg: dict) -> np.ndarray:
         if np.isnan(eid_raw):
             continue
 
-        eid = int(eid_raw)
+        eid = int(eid_raw) - 1  # Convert 1-based to 0-based
 
         # Bounds check on element index
         if eid < 0 or eid >= n_elem:
