@@ -115,7 +115,7 @@ def _solve_blqmr_batch(args):
         rhs_batch,
         tol,
         maxiter,
-        use_precond,
+        precond_type,
         droptol,
         batch_id,
         start_col,
@@ -136,7 +136,7 @@ def _solve_blqmr_batch(args):
         M2=None,
         x0=None,
         workspace=None,
-        use_precond=use_precond,
+        precond_type=precond_type,
         droptol=droptol,
     )
 
@@ -208,7 +208,7 @@ def _blqmr_parallel(
     tol: float,
     maxiter: int,
     rhsblock: int,
-    use_precond: bool,
+    precond_type: int,
     droptol: float,
     nthread: int,
     verbose: bool,
@@ -245,7 +245,7 @@ def _blqmr_parallel(
                 rhs_batch,
                 tol,
                 maxiter,
-                use_precond,
+                precond_type,
                 droptol,
                 batch_id,
                 start,
@@ -388,7 +388,7 @@ def femsolve(
         M, M1, M2 : preconditioners (disables parallel for gmres/bicgstab/cg)
         x0 : initial guess
         workspace : BLQMRWorkspace for blqmr
-        use_precond : bool - use automatic preconditioning for blqmr (default: True)
+        precond_type : int - use automatic preconditioning for blqmr (default: True)
         droptol : float - drop tolerance for ILU preconditioner (default: 0.001)
 
     Returns
@@ -558,7 +558,7 @@ def femsolve(
         x0 = kwargs.get("x0", None)
         rhsblock = kwargs.get("rhsblock", 8)
         workspace = kwargs.get("workspace", None)
-        use_precond = kwargs.get("use_precond", True)
+        precond_type = kwargs.get("precond_type", 3)
         droptol = kwargs.get("droptol", 0.001)
         nthread = kwargs.get("nthread", None)
         if nthread is None:
@@ -575,7 +575,7 @@ def femsolve(
                 M2=M2,
                 x0=x0,
                 workspace=workspace,
-                use_precond=use_precond,
+                precond_type=precond_type,
                 droptol=droptol,
             )
             x = result.x if result.x.ndim > 1 else result.x.reshape(-1, 1)
@@ -593,7 +593,7 @@ def femsolve(
                 tol=tol,
                 maxiter=maxiter,
                 rhsblock=rhsblock,
-                use_precond=use_precond,
+                precond_type=precond_type,
                 droptol=droptol,
                 nthread=nthread,
                 verbose=verbose,
@@ -615,7 +615,7 @@ def femsolve(
                     M2=M2,
                     x0=x0_batch,
                     workspace=workspace,
-                    use_precond=use_precond,
+                    precond_type=precond_type,
                     droptol=droptol,
                 )
                 x_batch = result.x if result.x.ndim > 1 else result.x.reshape(-1, 1)

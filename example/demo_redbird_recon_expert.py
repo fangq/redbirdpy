@@ -36,131 +36,6 @@ from redbird.solver import get_solver_info
 print(f"Solver info: {get_solver_info()}")
 
 
-def tsearchn(node, elem, points):
-    """Find enclosing tetrahedron and barycentric coordinates (optimized)."""
-    elem_0 = elem[:, :4].astype(np.int32) - 1
-    npts = points.shape[0]
-    nelem = elem_0.shape[0]
-
-    idx = np.full(npts, np.nan)
-    bary = np.full((npts, 4), np.nan)
-
-    # Precompute all tetrahedron vertices: (nelem, 4, 3)
-    tet_verts = node[elem_0]
-
-    # Precompute transformation matrices and their inverses
-    T = np.empty((nelem, 3, 3))
-    T[:, :, 0] = tet_verts[:, 0, :] - tet_verts[:, 3, :]
-    T[:, :, 1] = tet_verts[:, 1, :] - tet_verts[:, 3, :]
-    T[:, :, 2] = tet_verts[:, 2, :] - tet_verts[:, 3, :]
-
-    # Compute inverses (only for non-singular)
-    detT = np.linalg.det(T)
-    valid_elem = np.abs(detT) > 1e-14
-    Tinv = np.zeros((nelem, 3, 3))
-    Tinv[valid_elem] = np.linalg.inv(T[valid_elem])
-
-    v3 = tet_verts[:, 3, :]  # (nelem, 3)
-
-    # Bounding boxes
-    bbox_min = tet_verts.min(axis=1) - 1e-6
-    bbox_max = tet_verts.max(axis=1) + 1e-6
-
-    # Process all points
-    batch_size = 500
-    tol = 1e-10
-
-    for start in range(0, npts, batch_size):
-        end = min(start + batch_size, npts)
-        pts = points[start:end, :3]
-        blen = end - start
-
-        # Check bounding boxes
-        in_bbox = (
-            (pts[:, np.newaxis, :] >= bbox_min) & (pts[:, np.newaxis, :] <= bbox_max)
-        ).all(axis=2)
-        in_bbox &= valid_elem
-
-        for i in range(blen):
-            cand = np.where(in_bbox[i])[0]
-            if len(cand) == 0:
-                continue
-
-            pt = pts[i]
-            diff = pt - v3[cand]
-            b123 = np.einsum("nij,nj->ni", Tinv[cand], diff)
-            b4 = 1.0 - b123.sum(axis=1)
-
-            valid = (
-                ((b123 >= -tol) & (b123 <= 1 + tol)).all(axis=1)
-                & (b4 >= -tol)
-                & (b4 <= 1 + tol)
-            )
-            valid_idx = np.where(valid)[0]
-
-            if len(valid_idx) > 0:
-                e = cand[valid_idx[0]]
-                idx[start + i] = e
-                bary[start + i, :3] = b123[valid_idx[0]]
-                bary[start + i, 3] = b4[valid_idx[0]]
-
-    return idx, bary
-
-
-def meshremap(fromval, elemid, elembary, toelem, nodeto):
-    """Redistribute nodal values from source mesh to target mesh (vectorized)."""
-    if fromval.ndim == 1:
-        fromval = fromval[:, np.newaxis]
-    if fromval.shape[1] == len(elemid):
-        fromval = fromval.T
-
-    elem_0 = toelem[:, :4].astype(int) - 1
-    ncol = fromval.shape[1]
-    newval = np.zeros((nodeto, ncol))
-
-    valid = ~np.isnan(elemid)
-    valid_idx = np.where(valid)[0]
-    valid_eid = elemid[valid].astype(int)
-    valid_bary = elembary[valid]
-    valid_from = fromval[valid]
-
-    node_ids = elem_0[valid_eid]
-    weighted = valid_from[:, np.newaxis, :] * valid_bary[:, :, np.newaxis]
-
-    for j in range(4):
-        np.add.at(newval, node_ids[:, j], weighted[:, j, :])
-
-    return newval
-
-
-def meshinterp(fromval, elemid, elembary, fromelem, toval=None):
-    """Interpolate nodal values from source mesh to target points (vectorized)."""
-    if fromval.ndim == 1:
-        fromval = fromval[:, np.newaxis]
-
-    elem_0 = fromelem[:, :4].astype(int) - 1
-    npts = len(elemid)
-    ncol = fromval.shape[1]
-
-    if toval is None:
-        newval = np.zeros((npts, ncol))
-    else:
-        newval = toval.copy() if toval.ndim > 1 else toval[:, np.newaxis].copy()
-
-    valid = ~np.isnan(elemid)
-    valid_idx = np.where(valid)[0]
-    valid_eid = elemid[valid].astype(int)
-    valid_bary = elembary[valid]
-
-    node_ids = elem_0[valid_eid]
-    vals_at_nodes = fromval[node_ids]
-    interp_vals = np.sum(vals_at_nodes * valid_bary[:, :, np.newaxis], axis=1)
-
-    newval[valid_idx] = interp_vals
-
-    return newval if newval.shape[1] > 1 else newval.squeeze()
-
-
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   prepare simulation input
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -208,7 +83,7 @@ sd = rb.sdmap(cfg)
 # create coarse reconstruction mesh
 recon = {}
 recon["node"], _, recon["elem"] = i2m.meshabox([40, 0, 0], [160, 120, 60], 20)
-recon["mapid"], recon["mapweight"] = tsearchn(recon["node"], recon["elem"], cfg["node"])
+recon["mapid"], recon["mapweight"] = i2m.tsearchn(recon["node"], recon["elem"], cfg["node"])
 
 # Check for NaN
 nan_count = np.isnan(recon["mapid"]).sum()
@@ -242,7 +117,7 @@ for i in range(maxiter):
     Jmua, _ = forward.jac(sd, phi, cfg["deldotdel"], cfg["elem"], cfg["evol"])
     t2 = time.perf_counter()
 
-    Jmua_recon = meshremap(
+    Jmua_recon = i2m.meshremap(
         Jmua.T,
         recon["mapid"],
         recon["mapweight"],
@@ -266,7 +141,7 @@ for i in range(maxiter):
 
     recon["prop"][:, 0] = recon["prop"][:, 0] + dmu_recon
 
-    cfg["prop"] = meshinterp(
+    cfg["prop"] = i2m.meshinterp(
         recon["prop"], recon["mapid"], recon["mapweight"], recon["elem"], cfg["prop"]
     )
     t4 = time.perf_counter()

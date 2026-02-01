@@ -23,162 +23,6 @@ import redbird as rb
 from redbird import forward
 from redbird.recon import reginv, matreform
 
-
-def tsearchn(node, elem, points):
-    """Find enclosing tetrahedron and barycentric coordinates (vectorized).
-
-    Parameters
-    ----------
-    node : ndarray (Nn, 3)
-        Mesh nodes
-    elem : ndarray (Ne, 4+)
-        Element connectivity, 1-based indices (iso2mesh convention)
-    points : ndarray (Np, 3)
-        Query points
-
-    Returns
-    -------
-    idx : ndarray (Np,)
-        0-based element indices for numpy indexing (NaN if not found)
-    bary : ndarray (Np, 4)
-        Barycentric coordinates
-    """
-    elem_0 = elem[:, :4].astype(int) - 1
-    npts = points.shape[0]
-    nelem = elem_0.shape[0]
-
-    idx = np.full(npts, np.nan)
-    bary = np.full((npts, 4), np.nan)
-
-    # Precompute all tetrahedron vertices: (nelem, 4, 3)
-    tet_verts = node[elem_0]
-
-    # Precompute transformation matrices for barycentric coords
-    # T = [v0-v3, v1-v3, v2-v3] for each element
-    T = np.zeros((nelem, 3, 3))
-    T[:, :, 0] = tet_verts[:, 0, :] - tet_verts[:, 3, :]
-    T[:, :, 1] = tet_verts[:, 1, :] - tet_verts[:, 3, :]
-    T[:, :, 2] = tet_verts[:, 2, :] - tet_verts[:, 3, :]
-
-    # Precompute inverse of T for each element
-    # Use pseudo-inverse for numerical stability
-    detT = np.linalg.det(T)
-    valid_elem = np.abs(detT) > 1e-14
-    Tinv = np.zeros((nelem, 3, 3))
-    Tinv[valid_elem] = np.linalg.inv(T[valid_elem])
-
-    v3 = tet_verts[:, 3, :]  # (nelem, 3)
-
-    # Bounding boxes for quick rejection
-    bbox_min = tet_verts.min(axis=1) - 1e-6
-    bbox_max = tet_verts.max(axis=1) + 1e-6
-
-    # Process points in batches to balance memory and speed
-    batch_size = 1000
-    for start in range(0, npts, batch_size):
-        end = min(start + batch_size, npts)
-        pts_batch = points[start:end, :3]  # (batch, 3)
-        batch_len = end - start
-
-        # Check bounding boxes: (batch, nelem)
-        in_bbox = np.all(
-            (pts_batch[:, np.newaxis, :] >= bbox_min)
-            & (pts_batch[:, np.newaxis, :] <= bbox_max),
-            axis=2,
-        )
-
-        for i in range(batch_len):
-            pt = pts_batch[i]
-            candidates = np.where(in_bbox[i] & valid_elem)[0]
-
-            if len(candidates) == 0:
-                continue
-
-            # Compute barycentric coords for all candidates at once
-            # b = Tinv @ (pt - v3)
-            diff = pt - v3[candidates]  # (ncand, 3)
-            b123 = np.einsum("nij,nj->ni", Tinv[candidates], diff)  # (ncand, 3)
-            b4 = 1 - b123.sum(axis=1)  # (ncand,)
-
-            # Check if inside: all barycentric coords in [0, 1]
-            all_b = np.column_stack([b123, b4])  # (ncand, 4)
-            inside = np.all((all_b >= -1e-10) & (all_b <= 1 + 1e-10), axis=1)
-
-            valid_idx = np.where(inside)[0]
-            if len(valid_idx) > 0:
-                e = candidates[valid_idx[0]]
-                idx[start + i] = e
-                bary[start + i] = all_b[valid_idx[0]]
-
-    return idx, bary
-
-
-def meshremap(fromval, elemid, elembary, toelem, nodeto):
-    """Redistribute nodal values from source mesh to target mesh (vectorized)."""
-    if fromval.ndim == 1:
-        fromval = fromval[:, np.newaxis]
-    if fromval.shape[1] == len(elemid):
-        fromval = fromval.T
-
-    elem_0 = toelem[:, :4].astype(int) - 1
-    ncol = fromval.shape[1]
-    newval = np.zeros((nodeto, ncol))
-
-    # Filter valid entries
-    valid = ~np.isnan(elemid)
-    valid_idx = np.where(valid)[0]
-    valid_eid = elemid[valid].astype(int)
-    valid_bary = elembary[valid]
-    valid_from = fromval[valid]
-
-    # Get node indices for valid elements: (nvalid, 4)
-    node_ids = elem_0[valid_eid]
-
-    # Weighted values: (nvalid, 4, ncol)
-    weighted = valid_from[:, np.newaxis, :] * valid_bary[:, :, np.newaxis]
-
-    # Accumulate using np.add.at
-    for j in range(4):
-        np.add.at(newval, node_ids[:, j], weighted[:, j, :])
-
-    return newval
-
-
-def meshinterp(fromval, elemid, elembary, fromelem, toval=None):
-    """Interpolate nodal values from source mesh to target points (vectorized)."""
-    if fromval.ndim == 1:
-        fromval = fromval[:, np.newaxis]
-
-    elem_0 = fromelem[:, :4].astype(int) - 1
-    npts = len(elemid)
-    ncol = fromval.shape[1]
-
-    if toval is None:
-        newval = np.zeros((npts, ncol))
-    else:
-        newval = toval.copy() if toval.ndim > 1 else toval[:, np.newaxis].copy()
-
-    # Filter valid entries
-    valid = ~np.isnan(elemid)
-    valid_idx = np.where(valid)[0]
-    valid_eid = elemid[valid].astype(int)
-    valid_bary = elembary[valid]
-
-    # Get node indices: (nvalid, 4)
-    node_ids = elem_0[valid_eid]
-
-    # Get values at nodes: (nvalid, 4, ncol)
-    vals_at_nodes = fromval[node_ids]
-
-    # Interpolate: sum over 4 nodes weighted by barycentric coords
-    # (nvalid, 4, ncol) * (nvalid, 4, 1) -> sum -> (nvalid, ncol)
-    interp_vals = np.sum(vals_at_nodes * valid_bary[:, :, np.newaxis], axis=1)
-
-    newval[valid_idx] = interp_vals
-
-    return newval if newval.shape[1] > 1 else newval.squeeze()
-
-
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   prepare simulation input
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -230,7 +74,7 @@ recon = {}
 recon["node"], _, recon["elem"] = i2m.meshabox(
     [40, 0, 0], [160, 120, 60], 20
 )  # 1-based
-recon["mapid"], recon["mapweight"] = tsearchn(
+recon["mapid"], recon["mapweight"] = i2m.tsearchn(
     recon["node"], recon["elem"], cfg["node"]
 )  # mapid is 0-based
 
@@ -262,32 +106,19 @@ for i in range(maxiter):
     tic = time.perf_counter()
 
     # run forward on forward mesh
-    detphi, phi = forward.runforward(cfg, sd=sd)
-
+    detphi, phi = forward.runforward(cfg, sd=sd, method='blqmr', rhsblock=4, nthread=4)
     # build Jacobian for mua (cfg["elem"] is 1-based, jac handles conversion internally)
     # Jmua shape: (nsd, nn_forward)
     Jmua, _ = forward.jac(sd, phi, cfg["deldotdel"], cfg["elem"], cfg["evol"])
 
     # remap Jacobian to coarse recon mesh
-    # Jmua.T shape: (nn_forward, nsd) - rows are source (forward) nodes
-    # meshremap: fromval rows = source nodes, returns (nodeto, ncol)
-    # Result shape: (nn_recon, nsd), transpose back to (nsd, nn_recon)
-    Jmua_recon = meshremap(
+    Jmua_recon = i2m.meshremap(
         Jmua.T,
         recon["mapid"],
         recon["mapweight"],
         recon["elem"],
         recon["node"].shape[0],
     ).T
-
-    # Debug print on first iteration
-    if i == 0:
-        print(
-            f"DEBUG: Jmua shape={Jmua.shape}, range=[{Jmua.min():.3e}, {Jmua.max():.3e}]"
-        )
-        print(
-            f"DEBUG: Jmua_recon shape={Jmua_recon.shape}, range=[{Jmua_recon.min():.3e}, {Jmua_recon.max():.3e}]"
-        )
 
     # create inverse problem (real-valued formulation)
     Jmua_recon, misfit, _ = matreform(
@@ -312,22 +143,9 @@ for i in range(maxiter):
 
     # interpolate update to forward mesh
     # meshinterp: interpolate from recon nodes to forward nodes
-    cfg["prop"] = meshinterp(
+    cfg["prop"] = i2m.meshinterp(
         recon["prop"], recon["mapid"], recon["mapweight"], recon["elem"], cfg["prop"]
     )
-
-    # Debug print on first iteration (after all computations)
-    if i == 0:
-        print(f"DEBUG: misfit norm={np.linalg.norm(misfit):.3e}")
-        print(
-            f"DEBUG: dmu_recon norm={np.linalg.norm(dmu_recon):.3e}, range=[{dmu_recon.min():.3e}, {dmu_recon.max():.3e}]"
-        )
-        print(
-            f"DEBUG: recon prop mua range=[{recon['prop'][:,0].min():.6f}, {recon['prop'][:,0].max():.6f}]"
-        )
-        print(
-            f"DEBUG: cfg prop mua range=[{cfg['prop'][:,0].min():.6f}, {cfg['prop'][:,0].max():.6f}]"
-        )
 
     elapsed = time.perf_counter() - tic
     print(
