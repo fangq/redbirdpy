@@ -10,18 +10,17 @@ Functions:
     femlhs: Build FEM left-hand-side (stiffness) matrix
     femrhs: Build FEM right-hand-side vector
     femgetdet: Extract detector values from forward solution
-    deldotdel: Compute gradient dot product operator
     jac: Compute Jacobian matrices using adjoint method
 """
 
 __all__ = [
     "runforward",
-    "deldotdel",
     "femlhs",
     "femrhs",
     "femgetdet",
     "jac",
     "jacchrome",
+    "C0",
 ]
 
 import numpy as np
@@ -30,6 +29,8 @@ from typing import Dict, Tuple, Optional, Union, List, Any
 
 # Import solver functions from solver module
 from .solver import femsolve
+from .utility import sdmap, getoptodes, deldotdel
+from .property import extinction
 
 # Speed of light in mm/s
 C0 = 299792458000.0
@@ -40,8 +41,6 @@ def runforward(cfg: dict, **kwargs) -> Tuple[Any, Any]:
     """
     Perform forward simulations at all sources and all wavelengths.
     """
-    from . import utility
-
     solverflag = kwargs.get("solverflag", {})
     rfcw = kwargs.get("rfcw", [1])
     if isinstance(rfcw, int):
@@ -56,7 +55,7 @@ def runforward(cfg: dict, **kwargs) -> Tuple[Any, Any]:
 
     sd = kwargs.get("sd")
     if sd is None:
-        sd = utility.sdmap(cfg)
+        sd = sdmap(cfg)
     if not isinstance(sd, dict):
         sd = {wv: sd for wv in wavelengths}
 
@@ -70,7 +69,9 @@ def runforward(cfg: dict, **kwargs) -> Tuple[Any, Any]:
             Amat[wv] = femlhs(cfg, cfg["deldotdel"], wv, md)
             phi_sol, flag = femsolve(Amat[wv], rhs, **kwargs)
             phi_out[md]["phi"][wv] = phi_sol
-            detval = femgetdet(phi_sol, cfg, loc, bary)
+
+            # Pass rhs to femgetdet for wide-field detection
+            detval = femgetdet(phi_sol, cfg, rhs, loc, bary)
             detval_out[md]["detphi"][wv] = detval
 
     if len(wavelengths) == 1:
@@ -84,54 +85,6 @@ def runforward(cfg: dict, **kwargs) -> Tuple[Any, Any]:
         detval_out = detval_out[rfcw[0]]["detphi"]
 
     return detval_out, phi_out
-
-
-def deldotdel(cfg: dict) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Compute del(phi_i) dot del(phi_j) for FEM assembly.
-
-    PRESERVES ORIGINAL ALGORITHM - only optimizes array operations.
-    """
-    node = cfg["node"]
-    evol = cfg["evol"]
-
-    # Convert 1-based elem to 0-based for numpy indexing
-    elem_0 = cfg["elem"][:, :4].astype(np.int32) - 1
-    ne = elem_0.shape[0]
-
-    # Reshape nodes for vectorized computation: (Ne, 4, 3) -> (3, 4, Ne)
-    no = node[elem_0, :].transpose(2, 1, 0)  # Shape: (3, 4, Ne)
-
-    delphi = np.zeros((3, 4, ne))
-
-    # Column indices for cross-product computation (original algorithm)
-    col = np.array([[3, 1, 2, 1], [2, 0, 3, 2], [1, 3, 0, 3], [0, 2, 1, 0]])
-
-    # evol needs to be shape (ne,) for broadcasting
-    evol_inv = 1.0 / (evol * 6.0)  # Shape: (ne,)
-
-    # Original algorithm preserved exactly
-    for coord in range(3):
-        idx = [c for c in range(3) if c != coord]
-        for i in range(4):
-            # Each term is shape (ne,)
-            term1 = no[idx[0], col[i, 0], :] - no[idx[0], col[i, 1], :]
-            term2 = no[idx[1], col[i, 2], :] - no[idx[1], col[i, 3], :]
-            term3 = no[idx[0], col[i, 2], :] - no[idx[0], col[i, 3], :]
-            term4 = no[idx[1], col[i, 0], :] - no[idx[1], col[i, 1], :]
-
-            delphi[coord, i, :] = (term1 * term2 - term3 * term4) * evol_inv
-
-    result = np.zeros((ne, 10))
-    count = 0
-    for i in range(4):
-        for j in range(i, 4):
-            result[:, count] = np.sum(delphi[:, i, :] * delphi[:, j, :], axis=0)
-            count += 1
-
-    result *= evol[:, np.newaxis]
-
-    return result, delphi
 
 
 def femlhs(
@@ -308,165 +261,183 @@ def femrhs(
 ) -> Tuple[sparse.spmatrix, np.ndarray, np.ndarray, np.ndarray]:
     """
     Create right-hand-side vectors for FEM system.
+
+    Returns
+    -------
+    rhs : sparse matrix (Nn x Ncols)
+        RHS vectors. Column order: [point_src, wide_src, point_det, wide_det]
+    loc : ndarray
+        Element IDs enclosing each optode (1-based, NaN for wide-field)
+    bary : ndarray
+        Barycentric coordinates for point optodes
+    optode : ndarray
+        Combined optode positions
     """
-    from . import utility
+    import iso2mesh as i2m
 
-    optsrc, optdet, widesrc, widedet = utility.getoptodes(cfg, wv)
+    optsrc, optdet, widesrc, widedet = getoptodes(cfg, wv)
 
-    srcnum = optsrc.shape[0] if optsrc is not None and len(optsrc) > 0 else 0
-    detnum = optdet.shape[0] if optdet is not None and len(optdet) > 0 else 0
-    wfsrcnum = widesrc.shape[0] if widesrc is not None and len(widesrc) > 0 else 0
-    wfdetnum = widedet.shape[0] if widedet is not None and len(widedet) > 0 else 0
+    # Get counts
+    srcnum = optsrc.shape[0] if optsrc is not None and optsrc.size > 0 else 0
+    detnum = optdet.shape[0] if optdet is not None and optdet.size > 0 else 0
+
+    # widesrc/widedet are stored as (Nn x Npattern) in cfg
+    # But internally we work with (Npattern x Nn) for easier indexing
+    wfsrcnum = widesrc.shape[1] if widesrc is not None and widesrc.size > 0 else 0
+    wfdetnum = widedet.shape[1] if widedet is not None and widedet.size > 0 else 0
 
     nn = cfg["node"].shape[0]
     total_cols = srcnum + wfsrcnum + detnum + wfdetnum
+
+    if total_cols == 0:
+        return (
+            sparse.csr_matrix((nn, 0)),
+            np.array([]),
+            np.array([]).reshape(0, 4),
+            np.array([]),
+        )
+
     rhs = sparse.lil_matrix((nn, total_cols))
 
-    loc = np.full(total_cols, np.nan)
-    bary = np.full((total_cols, 4), np.nan)
+    # Initialize loc and bary for ALL optodes (including wide-field as NaN)
+    total_optodes = srcnum + wfsrcnum + detnum + wfdetnum
+    loc = np.full(total_optodes, np.nan)
+    bary = np.full((total_optodes, 4), np.nan)
 
-    elem_0 = cfg["elem"][:, :4].astype(np.int32) - 1
+    # elem is 1-based, tsearchn expects 1-based and returns 1-based
+    elem = cfg["elem"][:, :4].astype(np.int32)
+    elem_0 = elem - 1  # 0-based for indexing
 
-    # Precompute bounding boxes for acceleration
-    if srcnum > 0 or detnum > 0:
-        tet_nodes = cfg["node"][elem_0, :3]
-        bbox_min = np.min(tet_nodes, axis=1) - 1e-6
-        bbox_max = np.max(tet_nodes, axis=1) + 1e-6
-    else:
-        bbox_min = bbox_max = None
+    col_idx = 0
 
-    # Process point sources
+    # Process point sources using iso2mesh.tsearchn
     if srcnum > 0:
-        locsrc, barysrc = _tsearchn(cfg["node"], elem_0, optsrc, bbox_min, bbox_max)
+        optsrc = np.atleast_2d(optsrc)
+        locsrc, barysrc = i2m.tsearchn(cfg["node"], elem, optsrc[:, :3])
 
         for i in range(srcnum):
             if not np.isnan(locsrc[i]):
-                eid = int(locsrc[i])
-                rhs[elem_0[eid, :], i] = barysrc[i, :]
+                eid = int(locsrc[i]) - 1  # Convert to 0-based
+                rhs[elem_0[eid, :], col_idx + i] = barysrc[i, :]
 
+        # Store in loc/bary (keep 1-based for loc)
         loc[:srcnum] = locsrc
         bary[:srcnum, :] = barysrc
+        col_idx += srcnum
 
-    # Process widefield sources
+    # Process widefield sources - widesrc is (Nn x wfsrcnum)
     if wfsrcnum > 0:
-        rhs[:, srcnum : srcnum + wfsrcnum] = widesrc.T
+        rhs[:, col_idx : col_idx + wfsrcnum] = widesrc
+        # loc/bary already NaN for wide-field indices
+        col_idx += wfsrcnum
 
-    # Process point detectors
+    # Process point detectors using iso2mesh.tsearchn
     if detnum > 0:
-        locdet, barydet = _tsearchn(cfg["node"], elem_0, optdet, bbox_min, bbox_max)
+        optdet = np.atleast_2d(optdet)
+        locdet, barydet = i2m.tsearchn(cfg["node"], elem, optdet[:, :3])
 
-        offset = srcnum + wfsrcnum
         for i in range(detnum):
             if not np.isnan(locdet[i]):
-                eid = int(locdet[i])
-                rhs[elem_0[eid, :], offset + i] = barydet[i, :]
+                eid = int(locdet[i]) - 1  # Convert to 0-based
+                rhs[elem_0[eid, :], col_idx + i] = barydet[i, :]
 
-        loc[offset : offset + detnum] = locdet
-        bary[offset : offset + detnum, :] = barydet
+        # Store in loc/bary
+        det_start = srcnum + wfsrcnum
+        loc[det_start : det_start + detnum] = locdet
+        bary[det_start : det_start + detnum, :] = barydet
+        col_idx += detnum
 
-    # Process widefield detectors
+    # Process widefield detectors - widedet is (Nn x wfdetnum)
     if wfdetnum > 0:
-        offset = srcnum + wfsrcnum + detnum
-        rhs[:, offset : offset + wfdetnum] = widedet.T
+        rhs[:, col_idx : col_idx + wfdetnum] = widedet
 
     # Combine optode positions
-    if srcnum > 0 and detnum > 0:
-        optode = np.vstack([optsrc, optdet])
-    elif srcnum > 0:
-        optode = optsrc
-    elif detnum > 0:
-        optode = optdet
-    else:
-        optode = np.array([])
+    optode_list = []
+    if srcnum > 0:
+        optode_list.append(optsrc)
+    if detnum > 0:
+        optode_list.append(optdet)
+    optode = np.vstack(optode_list) if optode_list else np.array([])
 
     return rhs.tocsr(), loc, bary, optode
 
 
-def _tsearchn(
-    nodes: np.ndarray,
-    elem_0: np.ndarray,
-    points: np.ndarray,
-    bbox_min: np.ndarray = None,
-    bbox_max: np.ndarray = None,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Find enclosing tetrahedral element for each point.
-    Uses bounding box pre-filtering for acceleration.
-    """
-    npts = points.shape[0]
-    loc = np.full(npts, np.nan)
-    bary = np.full((npts, 4), np.nan)
-
-    # Compute bounding boxes if not provided
-    if bbox_min is None or bbox_max is None:
-        tet_nodes = nodes[elem_0, :3]
-        bbox_min = np.min(tet_nodes, axis=1) - 1e-6
-        bbox_max = np.max(tet_nodes, axis=1) + 1e-6
-
-    for i in range(npts):
-        pt = points[i, :3]
-
-        # Quick bounding box test to filter candidates
-        in_bbox = np.all((pt >= bbox_min) & (pt <= bbox_max), axis=1)
-        candidates = np.where(in_bbox)[0]
-
-        for e in candidates:
-            n = nodes[elem_0[e, :], :3]
-            b = _compute_bary(n, pt)
-            if b is not None and np.all(b >= -1e-10) and np.all(b <= 1 + 1e-10):
-                loc[i] = e
-                bary[i, :] = b
-                break
-
-    return loc, bary
-
-
-def _compute_bary(tet_nodes: np.ndarray, point: np.ndarray) -> Optional[np.ndarray]:
-    """Compute barycentric coordinates of point in tetrahedron."""
-    T = np.column_stack(
-        [
-            tet_nodes[0] - tet_nodes[3],
-            tet_nodes[1] - tet_nodes[3],
-            tet_nodes[2] - tet_nodes[3],
-        ]
-    )
-    try:
-        b = np.linalg.solve(T, point - tet_nodes[3])
-        return np.append(b, 1 - np.sum(b))
-    except np.linalg.LinAlgError:
-        return None
-
-
 def femgetdet(
-    phi: np.ndarray, cfg: dict, loc: np.ndarray, bary: np.ndarray
+    phi: np.ndarray,
+    cfg: dict,
+    rhs: np.ndarray,
+    loc: np.ndarray = None,
+    bary: np.ndarray = None,
 ) -> np.ndarray:
     """
     Extract detector measurements from forward solution.
-    """
-    srcnum = (
-        cfg["srcpos"].shape[0] if "srcpos" in cfg and cfg["srcpos"] is not None else 0
-    )
-    detnum = (
-        cfg["detpos"].shape[0] if "detpos" in cfg and cfg["detpos"] is not None else 0
-    )
-    widesrcnum = cfg.get("widesrc", np.array([])).shape[0] if "widesrc" in cfg else 0
-    widedetnum = cfg.get("widedet", np.array([])).shape[0] if "widedet" in cfg else 0
 
-    if srcnum + widesrcnum == 0 or detnum + widedetnum == 0:
+    Parameters
+    ----------
+    phi : ndarray
+        Forward solution (nn x nsrc_total)
+    cfg : dict
+        Configuration with srcpos, detpos, widesrc, widedet, etc.
+    rhs : ndarray or sparse matrix
+        RHS matrix from femrhs (nn x total_cols)
+    loc : ndarray, optional
+        Element indices for point optodes (1-based)
+    bary : ndarray, optional
+        Barycentric coordinates for point optodes
+
+    Returns
+    -------
+    detval : ndarray
+        Detector values (ndet x nsrc)
+    """
+    # Get source/detector counts
+    srcnum = 0
+    if "srcpos" in cfg and cfg["srcpos"] is not None:
+        srcpos = np.atleast_2d(cfg["srcpos"])
+        if srcpos.size > 0:
+            srcnum = srcpos.shape[0]
+
+    detnum = 0
+    if "detpos" in cfg and cfg["detpos"] is not None:
+        detpos = np.atleast_2d(cfg["detpos"])
+        if detpos.size > 0:
+            detnum = detpos.shape[0]
+
+    wfsrcnum = 0
+    if "widesrc" in cfg and cfg["widesrc"] is not None and cfg["widesrc"].size > 0:
+        wfsrcnum = cfg["widesrc"].shape[1]  # (Nn x Npattern)
+
+    wfdetnum = 0
+    if "widedet" in cfg and cfg["widedet"] is not None and cfg["widedet"].size > 0:
+        wfdetnum = cfg["widedet"].shape[1]  # (Nn x Npattern)
+
+    total_src = srcnum + wfsrcnum
+    total_det = detnum + wfdetnum
+
+    if total_src == 0 or total_det == 0:
         return np.array([])
 
-    elem_0 = cfg["elem"][:, :4].astype(np.int32) - 1
+    # Column indices in rhs/phi:
+    # [0:srcnum] = point sources
+    # [srcnum:srcnum+wfsrcnum] = wide sources
+    # [srcnum+wfsrcnum:srcnum+wfsrcnum+detnum] = point detectors
+    # [srcnum+wfsrcnum+detnum:end] = wide detectors
 
-    det_offset = srcnum + widesrcnum
-    detval = np.zeros((detnum, srcnum), dtype=phi.dtype)
+    det_col_start = srcnum + wfsrcnum
+    det_col_end = det_col_start + total_det
 
-    for i in range(detnum):
-        det_idx = det_offset + i
-        if not np.isnan(loc[det_idx]):
-            eid = int(loc[det_idx])
-            node_ids = elem_0[eid, :]
-            # Vectorized over sources using matrix multiply
-            detval[i, :] = bary[det_idx, :] @ phi[node_ids, :srcnum]
+    # Extract detector RHS columns
+    if sparse.issparse(rhs):
+        rhs_det = rhs[:, det_col_start:det_col_end].toarray()
+    else:
+        rhs_det = rhs[:, det_col_start:det_col_end]
+
+    # Extract source phi columns
+    phi_src = phi[:, :total_src]
+
+    # Compute detector values using adjoint: detval = rhs_det^T @ phi_src
+    # Result shape: (total_det x total_src)
+    detval = rhs_det.T @ phi_src
 
     return detval
 
@@ -600,13 +571,12 @@ def jac(sd, phi, deldotdel_mat, elem, evol, iselem=False):
 
 def jacchrome(Jmua: dict, chromophores: List[str]) -> dict:
     """Build Jacobian matrices for chromophores from mua Jacobian."""
-    from . import property as prop_module
 
     if not isinstance(Jmua, dict):
         raise ValueError("Jmua must be a dict with wavelength keys")
 
     wavelengths = list(Jmua.keys())
-    extin, _ = prop_module.extinction(wavelengths, chromophores)
+    extin, _ = extinction(wavelengths, chromophores)
 
     Jchrome = {}
     for i, ch in enumerate(chromophores):

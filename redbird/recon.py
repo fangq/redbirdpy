@@ -31,6 +31,10 @@ from scipy.sparse.linalg import spsolve
 from typing import Dict, Tuple, Optional, Union, List, Any
 import warnings
 
+from .forward import runforward, jac, jacchrome
+from .utility import sdmap, meshinterp
+from .property import updateprop
+
 
 def runrecon(
     cfg: dict,
@@ -71,7 +75,6 @@ def runrecon(
     cfg : dict
         Updated forward structure
     """
-    from . import forward, utility, property as prop_module
     import time
 
     # Parse options
@@ -88,7 +91,34 @@ def runrecon(
         rfcw = [rfcw]
 
     if sd is None:
-        sd = utility.sdmap(cfg)
+        sd = sdmap(cfg)
+
+    # Normalize recon["prop"] to always be 2D
+    if "prop" in recon:
+        if isinstance(recon["prop"], np.ndarray):
+            if recon["prop"].ndim == 1:
+                recon["prop"] = recon["prop"].reshape(1, -1)
+        elif isinstance(recon["prop"], dict):
+            for key in recon["prop"]:
+                if (
+                    isinstance(recon["prop"][key], np.ndarray)
+                    and recon["prop"][key].ndim == 1
+                ):
+                    recon["prop"][key] = recon["prop"][key].reshape(1, -1)
+
+    # Determine if this is label-based reconstruction
+    # Label-based: recon["prop"] has few rows (matching number of tissue labels)
+    # Node-based: recon["prop"] has many rows (matching number of nodes)
+    is_label_based = False
+    if "prop" in recon and isinstance(recon["prop"], np.ndarray):
+        n_prop_rows = recon["prop"].shape[0]
+        # If prop has fewer rows than a reasonable mesh would have nodes,
+        # it's label-based. Typical meshes have 100+ nodes.
+        if n_prop_rows < 50:
+            is_label_based = True
+            # Create seg array if not present, assuming all elements use label 1
+            if "seg" not in recon and "elem" in cfg:
+                recon["seg"] = np.ones(cfg["elem"].shape[0], dtype=int)
 
     resid = np.zeros(maxiter)
     updates = []
@@ -115,10 +145,10 @@ def runrecon(
 
         # Update cfg.prop from cfg.param if multi-spectral
         if "param" in cfg and isinstance(cfg.get("prop"), dict):
-            cfg["prop"] = prop_module.updateprop(cfg)
+            cfg["prop"] = updateprop(cfg)
 
         # Run forward simulation
-        detphi, phi = forward.runforward(cfg, solverflag=solverflag, sd=sd, rfcw=rfcw)
+        detphi, phi = runforward(cfg, solverflag=solverflag, sd=sd, rfcw=rfcw)
 
         # Build Jacobians
         wavelengths = [""]
@@ -131,7 +161,7 @@ def runrecon(
             sdwv = sd.get(wv, sd) if isinstance(sd, dict) else sd
             phiwv = phi.get(wv, phi) if isinstance(phi, dict) else phi
 
-            Jmua_n, Jmua_e = forward.jac(
+            Jmua_n, Jmua_e = jac(
                 sdwv, phiwv, cfg["deldotdel"], cfg["elem"], cfg["evol"]
             )
             # Use "mua" as key for single-wavelength case
@@ -146,7 +176,7 @@ def runrecon(
                 if k in ["hbo", "hbr", "water", "lipids", "aa3"]
             ]
             if chromophores:
-                Jmua = forward.jacchrome(Jmua, chromophores)
+                Jmua = jacchrome(Jmua, chromophores)
 
         # Flatten measurement data
         detphi0_flat = _flatten_detphi(detphi0, sd, wavelengths, rfcw)
@@ -174,12 +204,19 @@ def runrecon(
             nn_recon = recon["node"].shape[0]
             blocks = {k: (v[0], nn_recon) for k, v in blocks.items()}
 
-        # Compress for segmented reconstruction
+        # Compress for segmented reconstruction ONLY if:
+        # 1. seg array length matches Jacobian columns (node-based seg for compression)
+        # 2. Few unique labels (true label-based reconstruction, not element segmentation)
         if "seg" in recon and np.ndim(recon["seg"]) == 1:
-            Jflat = _masksum(Jflat, recon["seg"])
-            # Update blocks to reflect compressed size
-            n_labels = len(np.unique(recon["seg"]))
-            blocks = {k: (v[0], n_labels) for k, v in blocks.items()}
+            seg = recon["seg"]
+            n_jac_cols = Jflat.shape[1]
+            n_labels = len(np.unique(seg))
+
+            # Only compress if seg is node-based (matches Jac columns) with few labels
+            if len(seg) == n_jac_cols and n_labels < 50:
+                Jflat = _masksum(Jflat, seg)
+                # Update blocks to reflect compressed size
+                blocks = {k: (v[0], n_labels) for k, v in blocks.items()}
 
         # Store residual
         resid[iteration] = np.sum(np.abs(misfit))
@@ -216,58 +253,64 @@ def runrecon(
             # Apply update to recon structure (not cfg!)
             if key in ["mua", "dcoeff"]:
                 propidx = 0 if key == "mua" else 1
-                if "prop" in recon:
-                    if isinstance(recon["prop"], np.ndarray):
-                        if "seg" in recon and np.ndim(recon["seg"]) == 1:
-                            # Label-based: update each label's property
-                            labels = np.unique(recon["seg"])
-                            for li, label in enumerate(labels):
-                                if label > 0 and label < recon["prop"].shape[0]:
-                                    if key == "dcoeff":
-                                        old_dcoeff = 1.0 / (
-                                            3 * recon["prop"][label, propidx]
-                                        )
-                                        new_dcoeff = old_dcoeff + dx[li]
-                                        recon["prop"][label, propidx] = 1.0 / (
-                                            3 * new_dcoeff
-                                        )
-                                    else:
-                                        recon["prop"][label, propidx] += dx[li]
-                        else:
-                            # Node/element based
+                if "prop" in recon and isinstance(recon["prop"], np.ndarray):
+                    prop = recon["prop"]
+                    n_prop_rows = prop.shape[0]
+
+                    # Determine if label-based by comparing prop rows to dx length
+                    if n_prop_rows < len(dx) and n_prop_rows < 50:
+                        # Label-based: prop has one row per tissue label
+                        n_updates = min(n_prop_rows, len(dx))
+                        for li in range(n_updates):
                             if key == "dcoeff":
-                                old_dcoeff = 1.0 / (3 * recon["prop"][:, propidx])
-                                new_dcoeff = old_dcoeff + dx
-                                recon["prop"][:, propidx] = 1.0 / (3 * new_dcoeff)
+                                old_dcoeff = 1.0 / (3 * prop[li, propidx])
+                                new_dcoeff = old_dcoeff + dx[li]
+                                recon["prop"][li, propidx] = 1.0 / (3 * new_dcoeff)
                             else:
-                                recon["prop"][:, propidx] += dx
+                                recon["prop"][li, propidx] += dx[li]
+                    else:
+                        # Node/element based: prop has one row per node
+                        if key == "dcoeff":
+                            old_dcoeff = 1.0 / (3 * prop[:, propidx])
+                            new_dcoeff = old_dcoeff + dx
+                            recon["prop"][:, propidx] = 1.0 / (3 * new_dcoeff)
+                        else:
+                            recon["prop"][:, propidx] += dx
 
             elif key in ["hbo", "hbr", "water", "lipids", "scatamp", "scatpow"]:
-                if "param" in recon:
-                    if "seg" in recon and np.ndim(recon["seg"]) == 1:
-                        # Label-based
-                        labels = np.unique(recon["seg"])
-                        if hasattr(recon["param"][key], "__len__"):
-                            for li, label in enumerate(labels):
-                                if li < len(recon["param"][key]):
-                                    recon["param"][key][li] += dx[li]
+                # Determine target: recon["param"] if present, else cfg["param"]
+                if "param" in recon and key in recon["param"]:
+                    target = recon
+                elif "param" in cfg and key in cfg["param"]:
+                    target = cfg
+                else:
+                    continue
+
+                param_val = target["param"][key]
+
+                # Get length of parameter (scalar vs array)
+                if hasattr(param_val, "__len__"):
+                    n_param = len(param_val)
+                else:
+                    n_param = 1
+
+                # Determine if label-based by comparing param length to dx length
+                if n_param < len(dx) and n_param < 50:
+                    # Label-based: param has one value per tissue label
+                    if n_param == 1:
+                        # Scalar parameter
+                        if hasattr(param_val, "__len__"):
+                            target["param"][key][0] += dx[0]
                         else:
-                            recon["param"][key] += dx[0]
+                            target["param"][key] += dx[0]
                     else:
-                        # Node/element based
-                        recon["param"][key] = recon["param"][key] + dx
-                elif "param" in cfg:
-                    # Single mesh case - update cfg directly
-                    if "seg" in recon and np.ndim(recon["seg"]) == 1:
-                        labels = np.unique(recon["seg"])
-                        if hasattr(cfg["param"][key], "__len__"):
-                            for li, label in enumerate(labels):
-                                if li < len(cfg["param"][key]):
-                                    cfg["param"][key][li] += dx[li]
-                        else:
-                            cfg["param"][key] += dx[0]
-                    else:
-                        cfg["param"][key] = cfg["param"][key] + dx
+                        # Array parameter with few elements (labels)
+                        n_updates = min(n_param, len(dx))
+                        for li in range(n_updates):
+                            target["param"][key][li] += dx[li]
+                else:
+                    # Node/element based: param has one value per node
+                    target["param"][key] = param_val + dx
 
         updates.append(update)
 
@@ -634,9 +677,13 @@ def syncprop(cfg: dict, recon: dict) -> Tuple[dict, dict]:
     - mapid/mapweight map FORWARD mesh nodes to RECON mesh elements
     - We interpolate from recon mesh to forward mesh
 
-    mapid contains 0-based element indices into recon["elem"].
+    mapid contains 1-based element indices into recon["elem"].
     """
-    from . import utility
+    # Use iso2mesh's meshinterp for interpolation
+    try:
+        from iso2mesh import meshinterp
+    except ImportError:
+        from .utility import meshinterp
 
     # Determine mesh sizes
     cfg_nn = cfg["node"].shape[0]
@@ -650,7 +697,8 @@ def syncprop(cfg: dict, recon: dict) -> Tuple[dict, dict]:
         recon_ne = cfg_ne
 
     # Threshold to distinguish label-based from node/element-based
-    labelmax = min(recon_nn, recon_ne)
+    # Use a small number that's clearly less than any reasonable mesh size
+    label_threshold = 50
 
     if "param" in recon:
         # Map recon.param to cfg.param
@@ -658,7 +706,7 @@ def syncprop(cfg: dict, recon: dict) -> Tuple[dict, dict]:
         first_param = recon["param"][allkeys[0]]
         param_len = len(first_param) if hasattr(first_param, "__len__") else 1
 
-        if param_len < labelmax:
+        if param_len < label_threshold:
             # Label-based - direct copy (no interpolation needed)
             cfg["param"] = {
                 k: v.copy() if hasattr(v, "copy") else v
@@ -672,16 +720,13 @@ def syncprop(cfg: dict, recon: dict) -> Tuple[dict, dict]:
             for key in allkeys:
                 if "mapid" in recon and "mapweight" in recon and "elem" in recon:
                     # Interpolate from recon mesh to forward mesh nodes
-                    # mapid: forward mesh node -> recon mesh element (0-based)
-                    # mapweight: barycentric coords in recon mesh element
-                    # recon["elem"]: recon mesh connectivity (1-based)
-                    # recon["param"][key]: values at recon mesh nodes
-                    cfg["param"][key] = utility.meshinterp(
+                    # Result should have cfg_nn rows - pass None for toval
+                    cfg["param"][key] = meshinterp(
                         recon["param"][key],
                         recon["mapid"],
                         recon["mapweight"],
                         recon["elem"],  # 1-based, meshinterp converts
-                        cfg["param"].get(key),
+                        None,  # Create new array of correct size
                     )
                 else:
                     # Same mesh - direct copy
@@ -690,41 +735,47 @@ def syncprop(cfg: dict, recon: dict) -> Tuple[dict, dict]:
     elif "prop" in recon:
         # Map recon.prop to cfg.prop
         if not isinstance(recon["prop"], dict):
-            prop_len = recon["prop"].shape[0]
+            recon_prop_len = recon["prop"].shape[0]
 
-            if prop_len < labelmax:
-                # Label-based
+            if recon_prop_len < label_threshold:
+                # Label-based recon prop - direct copy
                 cfg["prop"] = recon["prop"].copy()
             elif "mapid" in recon and "mapweight" in recon and "elem" in recon:
-                # Interpolate from recon to forward mesh
-                cfg["prop"] = utility.meshinterp(
+                # Node-based recon prop with dual mesh - interpolate to forward mesh
+                # The result should be node-based on the FORWARD mesh (cfg_nn rows)
+                # Pass None for toval to create new array of correct size
+                cfg["prop"] = meshinterp(
                     recon["prop"],
                     recon["mapid"],
                     recon["mapweight"],
                     recon["elem"],
-                    cfg.get("prop"),
+                    None,  # Don't pass cfg["prop"] - it may be label-based
                 )
             else:
+                # Same mesh or no mapping - direct copy
                 cfg["prop"] = recon["prop"].copy()
         else:
             # Multi-wavelength
             allkeys = list(recon["prop"].keys())
             first_prop = recon["prop"][allkeys[0]]
-            prop_len = first_prop.shape[0]
+            recon_prop_len = first_prop.shape[0]
 
-            if prop_len < labelmax:
+            if recon_prop_len < label_threshold:
+                # Label-based - direct copy
                 cfg["prop"] = {k: v.copy() for k, v in recon["prop"].items()}
             elif "mapid" in recon and "mapweight" in recon and "elem" in recon:
+                # Node-based with dual mesh - interpolate
                 cfg["prop"] = {}
                 for k in allkeys:
-                    cfg["prop"][k] = utility.meshinterp(
+                    cfg["prop"][k] = meshinterp(
                         recon["prop"][k],
                         recon["mapid"],
                         recon["mapweight"],
                         recon["elem"],
-                        cfg.get("prop", {}).get(k),
+                        None,  # Create new array of correct size
                     )
             else:
+                # Same mesh - direct copy
                 cfg["prop"] = {k: v.copy() for k, v in recon["prop"].items()}
 
     return cfg, recon

@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 # Import redbird
 import redbird as rb
+import matplotlib.pyplot as plt
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   prepare simulation input
@@ -78,6 +79,8 @@ node_with_data = np.column_stack([cfg["node"], phi_log])
 
 # plotmesh with slice 'y>60'
 plotmesh(node_with_data, cfg["elem"], "y>60")
+
+plt.show()
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   Print summary

@@ -396,7 +396,7 @@ def setmesh(
     cfg : dict
         Updated configuration with new mesh
     """
-    from . import utility
+    from .utility import meshprep
 
     # Fields that depend on mesh geometry and need recomputation
     clear_fields = [
@@ -428,7 +428,7 @@ def setmesh(
         cfg["seg"] = elem[:, 4].astype(int)
 
     # Prepare mesh (computes face, area, evol, deldotdel, etc.)
-    cfg, _ = utility.meshprep(cfg)
+    cfg, _ = meshprep(cfg)
 
     return cfg
 

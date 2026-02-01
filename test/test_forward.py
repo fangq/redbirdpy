@@ -201,19 +201,36 @@ class TestFemrhs(unittest.TestCase):
         srcnum = self.cfg["srcpos"].shape[0]
         detnum = self.cfg["detpos"].shape[0]
 
-        self.assertEqual(rhs.shape[0], nn)
-        self.assertEqual(rhs.shape[1], srcnum + detnum)
+        # Include wide-field sources if present
+        wfsrcnum = 0
+        if (
+            "widesrc" in self.cfg
+            and self.cfg["widesrc"] is not None
+            and self.cfg["widesrc"].size > 0
+        ):
+            wfsrcnum = self.cfg["widesrc"].shape[1]
+        wfdetnum = 0
+        if (
+            "widedet" in self.cfg
+            and self.cfg["widedet"] is not None
+            and self.cfg["widedet"].size > 0
+        ):
+            wfdetnum = self.cfg["widedet"].shape[1]
 
-    def test_femrhs_loc_0based(self):
-        """femrhs loc should be 0-based element indices."""
+        self.assertEqual(rhs.shape[0], nn)
+        self.assertEqual(rhs.shape[1], srcnum + wfsrcnum + detnum + wfdetnum)
+
+    def test_femrhs_loc_1based(self):
+        """femrhs loc should be 1-based element indices from tsearchn."""
         _, loc, _, _ = forward.femrhs(self.cfg, self.sd)
 
         ne = self.cfg["elem"].shape[0]
         valid_loc = loc[~np.isnan(loc)]
 
         if len(valid_loc) > 0:
-            self.assertGreaterEqual(valid_loc.min(), 0)
-            self.assertLess(valid_loc.max(), ne)
+            # tsearchn returns 1-based indices
+            self.assertGreaterEqual(valid_loc.min(), 1)
+            self.assertLessEqual(valid_loc.max(), ne)
 
     def test_femrhs_bary_sum_to_one(self):
         """femrhs barycentric coordinates should sum to 1."""
@@ -276,33 +293,42 @@ class TestFemgetdet(unittest.TestCase):
         self.cfg, self.sd = utility.meshprep(self.cfg)
 
         Amat = forward.femlhs(self.cfg, self.cfg["deldotdel"])
-        rhs, self.loc, self.bary, _ = forward.femrhs(self.cfg, self.sd)
-        self.phi, _ = forward.femsolve(Amat, rhs)
+        self.rhs, self.loc, self.bary, _ = forward.femrhs(self.cfg, self.sd)
+        self.phi, _ = forward.femsolve(Amat, self.rhs)
 
     def test_femgetdet_shape(self):
         """femgetdet should return (Ndet, Nsrc) array."""
-        detval = forward.femgetdet(self.phi, self.cfg, self.loc, self.bary)
+        detval = forward.femgetdet(self.phi, self.cfg, self.rhs, self.loc, self.bary)
 
         srcnum = self.cfg["srcpos"].shape[0]
         detnum = self.cfg["detpos"].shape[0]
 
-        self.assertEqual(detval.shape, (detnum, srcnum))
+        # Include wide-field sources if present
+        wfsrcnum = 0
+        if (
+            "widesrc" in self.cfg
+            and self.cfg["widesrc"] is not None
+            and self.cfg["widesrc"].size > 0
+        ):
+            wfsrcnum = self.cfg["widesrc"].shape[1]
+
+        self.assertEqual(detval.shape, (detnum, srcnum + wfsrcnum))
 
     def test_femgetdet_finite(self):
         """femgetdet values should be finite."""
-        detval = forward.femgetdet(self.phi, self.cfg, self.loc, self.bary)
+        detval = forward.femgetdet(self.phi, self.cfg, self.rhs, self.loc, self.bary)
 
         self.assertTrue(np.all(np.isfinite(detval)))
 
-    def test_femgetdet_handles_0based_loc(self):
-        """femgetdet should handle 0-based loc correctly."""
-        # loc should be 0-based
+    def test_femgetdet_handles_1based_loc(self):
+        """femgetdet should handle 1-based loc correctly."""
+        # loc from tsearchn is 1-based
         valid_loc = self.loc[~np.isnan(self.loc)]
         if len(valid_loc) > 0:
-            self.assertGreaterEqual(valid_loc.min(), 0)
+            self.assertGreaterEqual(valid_loc.min(), 1)
 
         # Should not raise IndexError
-        detval = forward.femgetdet(self.phi, self.cfg, self.loc, self.bary)
+        detval = forward.femgetdet(self.phi, self.cfg, self.rhs, self.loc, self.bary)
 
         self.assertIsNotNone(detval)
 
@@ -464,6 +490,96 @@ class TestJacchrome(unittest.TestCase):
         # Should have 2*nsd rows (stacked wavelengths)
         self.assertEqual(Jchrome["hbo"].shape[0], 2 * nsd)
         self.assertEqual(Jchrome["hbo"].shape[1], nn)
+
+
+@unittest.skipUnless(HAS_ISO2MESH, "iso2mesh not installed")
+class TestWidefieldFemrhs(unittest.TestCase):
+    """Test femrhs with wide-field sources."""
+
+    def setUp(self):
+        """Set up wide-field test configuration."""
+        node, face, elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 8)
+
+        self.cfg = {
+            "node": node,
+            "elem": elem,
+            "prop": np.array([[0, 0, 1, 1], [0.01, 1, 0, 1.37]]),
+            "srcpos": np.array([[30, 30, 0]]),
+            "srcdir": np.array([[0, 0, 1]]),
+            "detpos": np.array([[30, 40, 0], [40, 30, 0]]),
+            "detdir": np.array([[0, 0, 1]]),
+            "seg": np.ones(elem.shape[0], dtype=int),
+            "omega": 0,
+            "srctype": "planar",
+            "srcparam1": np.array([20, 0, 0, 0]),
+            "srcparam2": np.array([0, 20, 0, 0]),
+        }
+        self.cfg, self.sd = utility.meshprep(self.cfg)
+
+    def test_femrhs_widesrc_columns(self):
+        """femrhs should include wide-field source columns."""
+        rhs, loc, bary, optode = forward.femrhs(self.cfg, self.sd)
+
+        wfsrcnum = self.cfg["widesrc"].shape[1] if self.cfg["widesrc"].size > 0 else 0
+        srcnum = self.cfg["srcpos"].shape[0]
+        detnum = self.cfg["detpos"].shape[0]
+
+        expected_cols = srcnum + wfsrcnum + detnum
+        self.assertEqual(rhs.shape[1], expected_cols)
+
+    def test_femrhs_widesrc_nonzero(self):
+        """femrhs wide-field columns should have nonzero entries."""
+        rhs, _, _, _ = forward.femrhs(self.cfg, self.sd)
+
+        srcnum = self.cfg["srcpos"].shape[0]
+        wfsrcnum = self.cfg["widesrc"].shape[1]
+
+        # Wide-field columns should have nonzero entries
+        wf_cols = rhs[:, srcnum : srcnum + wfsrcnum]
+        self.assertGreater(wf_cols.nnz, 0)
+
+
+@unittest.skipUnless(HAS_ISO2MESH, "iso2mesh not installed")
+class TestWidefieldRunforward(unittest.TestCase):
+    """Test runforward with wide-field sources."""
+
+    def setUp(self):
+        """Set up wide-field test configuration."""
+        node, face, elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 8)
+
+        self.cfg = {
+            "node": node,
+            "elem": elem,
+            "prop": np.array([[0, 0, 1, 1], [0.01, 1, 0, 1.37]]),
+            "srcpos": np.array([[30, 30, 0]]),
+            "srcdir": np.array([[0, 0, 1]]),
+            "detpos": np.array([[30, 40, 0], [40, 30, 0]]),
+            "detdir": np.array([[0, 0, 1]]),
+            "seg": np.ones(elem.shape[0], dtype=int),
+            "omega": 0,
+            "srctype": "planar",
+            "srcparam1": np.array([20, 0, 0, 0]),
+            "srcparam2": np.array([0, 20, 0, 0]),
+        }
+        self.cfg, self.sd = utility.meshprep(self.cfg)
+
+    def test_runforward_widesrc_detval_finite(self):
+        """runforward with wide-field should produce finite detval."""
+        detval, phi = forward.runforward(self.cfg, sd=self.sd)
+
+        self.assertTrue(np.all(np.isfinite(detval)))
+
+    def test_runforward_widesrc_phi_finite(self):
+        """runforward with wide-field should produce finite phi."""
+        detval, phi = forward.runforward(self.cfg, sd=self.sd)
+
+        self.assertTrue(np.all(np.isfinite(phi)))
+
+    def test_runforward_widesrc_detval_positive(self):
+        """runforward with wide-field should produce positive detval."""
+        detval, phi = forward.runforward(self.cfg, sd=self.sd)
+
+        self.assertTrue(np.all(detval > 0))
 
 
 if __name__ == "__main__":
