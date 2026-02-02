@@ -12,7 +12,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from redbird import analytical
+from redbirdpy import analytical
 
 
 class TestSphericalBesselFunctions(unittest.TestCase):

@@ -1,4 +1,4 @@
-# Redbird - Python Toolbox for Diffuse Optical Imaging
+# Redbird-Python - Python Toolbox for Diffuse Optical Imaging
 
 A Python translation of the [Redbird](https://github.com/fangq/redbird) MATLAB toolbox for forward and inverse modeling of diffuse optical tomography (DOT) and near-infrared spectroscopy (NIRS).
 
@@ -21,13 +21,13 @@ pip install numpy scipy
 pip install iso2mesh  # or install from https://github.com/NeuroJSON/pyiso2mesh
 ```
 
-Place the `redbird` folder in your Python path or project directory.
+Place the `redbirdpy` folder in your Python path or project directory.
 
 ## Quick Start
 
 ```python
 import numpy as np
-import redbird as rb
+import redbirdpy as rb
 
 # Define mesh (nodes and tetrahedral elements)
 node = ...  # Nn x 3 array of coordinates
@@ -61,7 +61,7 @@ print(f"Detector measurement: {detval}")
 
 ## Module Structure
 
-### `redbird.forward` - Forward Modeling
+### `redbirdpy.forward` - Forward Modeling
 
 | Function | Description |
 |----------|-------------|
@@ -74,7 +74,7 @@ print(f"Detector measurement: {detval}")
 | `jac(sd, phi, ...)` | Build Jacobian matrices |
 | `jacchrome(Jmua, chromes)` | Chromophore Jacobians |
 
-### `redbird.recon` - Reconstruction
+### `redbirdpy.recon` - Reconstruction
 
 | Function | Description |
 |----------|-------------|
@@ -85,7 +85,7 @@ print(f"Detector measurement: {detval}")
 | `matreform(A, ymeas, ymodel)` | Matrix reformulation |
 | `prior(seg, type)` | Structure-prior matrices |
 
-### `redbird.utility` - Utilities
+### `redbirdpy.utility` - Utilities
 
 | Function | Description |
 |----------|-------------|
@@ -97,7 +97,7 @@ print(f"Detector measurement: {detval}")
 | `addnoise(data, snr)` | Add simulated noise |
 | `elem2node(elem, val)` | Element to node interpolation |
 
-### `redbird.property` - Optical Properties
+### `redbirdpy.property` - Optical Properties
 
 | Function | Description |
 |----------|-------------|

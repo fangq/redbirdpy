@@ -17,13 +17,16 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
-from redbird import forward
-from redbird.solver import femsolve
+import redbirdpy as rb
+from redbirdpy import forward
+from redbirdpy.solver import femsolve
+from redbirdpy.utility import getoptodes
+
 import iso2mesh as i2m
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 from scipy.interpolate import griddata
+
 
 def plot_mesh_slice(ax, cutpos, cutval, facedata, xlabel="x", ylabel="y", **kwargs):
     """Helper to plot mesh slice using tricontourf."""
@@ -44,6 +47,7 @@ def plot_mesh_slice(ax, cutpos, cutval, facedata, xlabel="x", ylabel="y", **kwar
     ax.set_ylabel(ylabel)
     ax.set_aspect("equal")
     return tc
+
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   prepare simulation input
@@ -103,7 +107,6 @@ Amat = forward.femlhs(cfg, deldotdel_mat)
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 # Debug: check what getoptodes returns
-from redbird.utility import getoptodes
 optsrc, optdet, widesrc, widedet = getoptodes(cfg, "")
 print(f"optsrc shape: {optsrc.shape if optsrc is not None else None}")
 print(f"optdet shape: {optdet.shape if optdet is not None else None}")
@@ -135,6 +138,7 @@ detval = forward.femgetdet(phi, cfg, rhs, loc, bary)
 
 try:
     import pmcx
+
     HAS_MCX = True
 except ImportError:
     HAS_MCX = False
@@ -173,7 +177,9 @@ fig, axes = plt.subplots(1, 2 if HAS_MCX else 1, figsize=(12 if HAS_MCX else 6, 
 if HAS_MCX and fcw is not None:
     # MCX solution
     ax1 = axes[0]
-    mcx_slice = np.rot90(np.log10(np.abs(cfg["srcweight"] * fcw[:, 29, :].squeeze()) + 1e-20))
+    mcx_slice = np.rot90(
+        np.log10(np.abs(cfg["srcweight"] * fcw[:, 29, :].squeeze()) + 1e-20)
+    )
     im1 = ax1.imshow(mcx_slice, extent=[0, 60, 0, 30], aspect="auto", origin="lower")
     ax1.set_xlim([0, 60])
     ax1.set_ylim([0, 30])
@@ -189,12 +195,16 @@ else:
 
 # Plot Redbird solution on slice x=30
 cutpos, cutval, facedata = i2m.qmeshcut(
-    cfg["elem"][:, :4], cfg["node"][:, :3],
-    np.log10(np.abs(phi[:nn, 0]) + 1e-20), "x=29.5"
+    cfg["elem"][:, :4],
+    cfg["node"][:, :3],
+    np.log10(np.abs(phi[:nn, 0]) + 1e-20),
+    "x=29.5",
 )[:3]
 # For x=const slice, use y,z coordinates (columns 1,2 of cutpos)
 cutpos_2d = cutpos[:, 1:3]  # y, z
-tc = plot_mesh_slice(ax2, cutpos_2d, cutval, facedata, xlabel="y", ylabel="z", levels=20, cmap="viridis")
+tc = plot_mesh_slice(
+    ax2, cutpos_2d, cutval, facedata, xlabel="y", ylabel="z", levels=20, cmap="viridis"
+)
 ax2.set_title("Redbird Solution (x=30)")
 plt.colorbar(tc, ax=ax2)
 
@@ -221,13 +231,20 @@ if HAS_MCX and fcw is not None:
     )
 
     # Redbird contours
-    cs1 = ax.contour(xi, yi, np.log10(np.abs(vphi) + 1e-20), clines, colors="r", linewidths=2)
+    cs1 = ax.contour(
+        xi, yi, np.log10(np.abs(vphi) + 1e-20), clines, colors="r", linewidths=2
+    )
     ax.clabel(cs1, inline=True, fontsize=8)
 
     # MCX contours
     cwf = fcw[29, :, :].squeeze().T
     cs2 = ax.contour(
-        xi, yi, np.log10(cfg["srcweight"] * np.abs(cwf) + 1e-20), clines, colors="b", linewidths=2
+        xi,
+        yi,
+        np.log10(cfg["srcweight"] * np.abs(cwf) + 1e-20),
+        clines,
+        colors="b",
+        linewidths=2,
     )
     ax.clabel(cs2, inline=True, fontsize=8)
 
@@ -237,9 +254,10 @@ if HAS_MCX and fcw is not None:
 
     # Create legend with proxy artists
     from matplotlib.lines import Line2D
+
     legend_elements = [
-        Line2D([0], [0], color='r', linewidth=2, label='Redbird'),
-        Line2D([0], [0], color='b', linewidth=2, label='MCX')
+        Line2D([0], [0], color="r", linewidth=2, label="Redbird"),
+        Line2D([0], [0], color="b", linewidth=2, label="MCX"),
     ]
     ax.legend(handles=legend_elements, loc="upper right")
 

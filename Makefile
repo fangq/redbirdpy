@@ -36,7 +36,7 @@ coverage:
 	@echo "Coverage report generated in htmlcov/index.html"
 
 lint:
-	$(PYTHON) -m flake8 redbird/ tests/
+	$(PYTHON) -m flake8 redbirdpy/ test/
 	@echo "Linting complete"
 
 clean:
@@ -73,7 +73,7 @@ check: build
 
 # Install from TestPyPI (for testing)
 install-testpypi:
-	$(PIP) install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ redbird
+	$(PIP) install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ redbirdpy
 
 # Generate documentation (requires sphinx)
 docs:
@@ -81,11 +81,11 @@ docs:
 
 # Format code (requires black)
 format:
-	$(PYTHON) -m black redbird/ tests/
+	$(PYTHON) -m black redbirdpy/ test/
 
 # Type checking (requires mypy)
 typecheck:
-	$(PYTHON) -m mypy redbird/
+	$(PYTHON) -m mypy redbirdpy/
 
 # Run all checks before commit
 precommit: lint test
@@ -93,11 +93,11 @@ precommit: lint test
 
 # Show package info
 info:
-	@$(PYTHON) -c "import redbird; redbird.info()"
+	@$(PYTHON) -c "import redbirdpy; redbirdpy.info()"
 
 # Show version
 version:
-	@$(PYTHON) -c "import redbird; print(redbird.__version__)"
+	@$(PYTHON) -c "import redbirdpy; print(redbirdpy.__version__)"
 
 pretty:
-	$(PYTHON) -m black test/*.py redbird/*.py setup.py
+	$(PYTHON) -m black test/*.py example/*.py redbirdpy/*.py setup.py

@@ -12,8 +12,7 @@ from numpy.testing import assert_array_almost_equal, assert_allclose
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
-from redbird import property as prop_module, utility
+from redbirdpy import property as prop_module, utility
 
 try:
     import iso2mesh as i2m

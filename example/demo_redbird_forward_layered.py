@@ -16,12 +16,13 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
-from redbird import forward
-from redbird.solver import femsolve
+import redbirdpy as rb
+from redbirdpy import forward
+
 import iso2mesh as i2m
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
+
 
 def plot_mesh_slice(ax, cutpos, cutval, facedata, xlabel="x", ylabel="y", **kwargs):
     """Helper to plot mesh slice using tricontourf."""
@@ -36,6 +37,7 @@ def plot_mesh_slice(ax, cutpos, cutval, facedata, xlabel="x", ylabel="y", **kwar
     ax.set_ylabel(ylabel)
     ax.set_aspect("equal")
     return tc
+
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   Mesh generation (iso2mesh)
@@ -75,21 +77,27 @@ print("== define settings in cfg ...")
 # Creating forward simulation data structure cfg
 # properties: [mua(1/mm), mus(1/mm), g, n]
 # if both mus/g are given, mus'=mus*(1-g) will be used for diffusion, usually set g to 0
-cfg["prop"] = np.array([
-    [0, 0, 1, 1],           # cfg.prop row-1 is for label 0
-    [0.006, 0.8, 0, 1.37],  # label 1 (0 < z < 5)
-    [0.02, 0.4, 0, 1.37],   # label 2 (5 < z < 10)
-    [0.002, 1, 0, 1.37],    # label 3 (10 < z < 30)
-])
+cfg["prop"] = np.array(
+    [
+        [0, 0, 1, 1],  # cfg.prop row-1 is for label 0
+        [0.006, 0.8, 0, 1.37],  # label 1 (0 < z < 5)
+        [0.02, 0.4, 0, 1.37],  # label 2 (5 < z < 10)
+        [0.002, 1, 0, 1.37],  # label 3 (10 < z < 30)
+    ]
+)
 
 # Default redbird source is a pencil beam, same as mcx/mmc
 xi, yi = np.meshgrid(np.arange(5, 51, 5), np.arange(5, 41, 5))
-cfg["srcpos"] = np.c_[xi.ravel(), yi.ravel(), np.ones(xi.size)]  # redbird srcpos can have multiple rows
+cfg["srcpos"] = np.c_[
+    xi.ravel(), yi.ravel(), np.ones(xi.size)
+]  # redbird srcpos can have multiple rows
 cfg["srcdir"] = [0, 0, 1]  # srcdir determines how sources are sunken into the mesh
 
 # Redbird detector positions are point-like, directly sampling the output fluence
 xi, yi = np.meshgrid(np.arange(7.5, 51, 5), np.arange(7.5, 41, 5))
-cfg["detpos"] = np.c_[xi.ravel(), yi.ravel(), np.ones(xi.size)]  # redbird detpos can have multiple rows
+cfg["detpos"] = np.c_[
+    xi.ravel(), yi.ravel(), np.ones(xi.size)
+]  # redbird detpos can have multiple rows
 cfg["detdir"] = [0, 0, 1]  # redbird automatically computes adjoint solutions
 
 # redbird cfg does not need cfg.{nphoton,tstart,tend,tstep,elemprop}
@@ -141,11 +149,22 @@ fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 # Plot forward solution from source (first column)
 ax1 = axes[0]
 cutpos, cutval, facedata = i2m.qmeshcut(
-    cfg["elem"][:, :4], cfg["node"][:, :3],
-    np.log10(np.abs(phi[:nn, 0]) + 1e-20), "y=25"
+    cfg["elem"][:, :4],
+    cfg["node"][:, :3],
+    np.log10(np.abs(phi[:nn, 0]) + 1e-20),
+    "y=25",
 )[:3]
 cutpos_2d = cutpos[:, [0, 2]]  # x, z for y=const slice
-tc1 = plot_mesh_slice(ax1, cutpos_2d, cutval, facedata, xlabel="x (mm)", ylabel="z (mm)", levels=20, cmap="jet")
+tc1 = plot_mesh_slice(
+    ax1,
+    cutpos_2d,
+    cutval,
+    facedata,
+    xlabel="x (mm)",
+    ylabel="z (mm)",
+    levels=20,
+    cmap="jet",
+)
 ax1.set_title("Forward solution from source #1")
 plt.colorbar(tc1, ax=ax1, label="log10(fluence)")
 
@@ -153,11 +172,22 @@ plt.colorbar(tc1, ax=ax1, label="log10(fluence)")
 ax2 = axes[1]
 nsrc = cfg["srcpos"].shape[0]
 cutpos, cutval, facedata = i2m.qmeshcut(
-    cfg["elem"][:, :4], cfg["node"][:, :3],
-    np.log10(np.abs(phi[:nn, nsrc]) + 1e-20), "y=25"  # First detector column is after all sources
+    cfg["elem"][:, :4],
+    cfg["node"][:, :3],
+    np.log10(np.abs(phi[:nn, nsrc]) + 1e-20),
+    "y=25",  # First detector column is after all sources
 )[:3]
 cutpos_2d = cutpos[:, [0, 2]]
-tc2 = plot_mesh_slice(ax2, cutpos_2d, cutval, facedata, xlabel="x (mm)", ylabel="z (mm)", levels=20, cmap="jet")
+tc2 = plot_mesh_slice(
+    ax2,
+    cutpos_2d,
+    cutval,
+    facedata,
+    xlabel="x (mm)",
+    ylabel="z (mm)",
+    levels=20,
+    cmap="jet",
+)
 ax2.set_title("Forward solution from detector #1")
 plt.colorbar(tc2, ax=ax2, label="log10(fluence)")
 
@@ -166,14 +196,25 @@ plt.tight_layout()
 # Additional plot: show layer structure with z-slice
 fig2, ax3 = plt.subplots(figsize=(10, 6))
 cutpos, cutval, facedata = i2m.qmeshcut(
-    cfg["elem"][:, :4], cfg["node"][:, :3],
-    np.log10(np.abs(phi[:nn, 0]) + 1e-20), "x=30"
+    cfg["elem"][:, :4],
+    cfg["node"][:, :3],
+    np.log10(np.abs(phi[:nn, 0]) + 1e-20),
+    "x=30",
 )[:3]
 cutpos_2d = cutpos[:, 1:3]  # y, z for x=const slice
-tc3 = plot_mesh_slice(ax3, cutpos_2d, cutval, facedata, xlabel="y (mm)", ylabel="z (mm)", levels=20, cmap="jet")
+tc3 = plot_mesh_slice(
+    ax3,
+    cutpos_2d,
+    cutval,
+    facedata,
+    xlabel="y (mm)",
+    ylabel="z (mm)",
+    levels=20,
+    cmap="jet",
+)
 ax3.set_title("Forward solution (x=30 slice) showing layer structure")
-ax3.axhline(y=5, color='w', linestyle='--', linewidth=1, label='Layer 1/2 boundary')
-ax3.axhline(y=10, color='w', linestyle='--', linewidth=1, label='Layer 2/3 boundary')
+ax3.axhline(y=5, color="w", linestyle="--", linewidth=1, label="Layer 1/2 boundary")
+ax3.axhline(y=10, color="w", linestyle="--", linewidth=1, label="Layer 2/3 boundary")
 plt.colorbar(tc3, ax=ax3, label="log10(fluence)")
 ax3.legend()
 

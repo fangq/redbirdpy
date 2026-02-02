@@ -8,7 +8,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
+import redbirdpy as rb
 import iso2mesh as i2m
 import matplotlib.pyplot as plt
 
@@ -60,19 +60,21 @@ cfg0 = {
     "detparam2": [0, 40, 0, 0],
     "detdir": np.array([[0, 0, -1]]),
     "detpattern": detpattern,
-    "prop": np.array([
-        [0, 0, 1, 1],
-        [0.008, 1, 0, 1.37],
-        [0.032, 1, 0, 1.37],
-        [0.032, 1, 0, 1.37],
-    ]),
+    "prop": np.array(
+        [
+            [0, 0, 1, 1],
+            [0.008, 1, 0, 1.37],
+            [0.032, 1, 0, 1.37],
+            [0.032, 1, 0, 1.37],
+        ]
+    ),
     "omega": 0,
 }
 
 cfg0 = rb.meshprep(cfg0)[0]
 
-if 'widesrc' in cfg0 and cfg0['widesrc'].size > 0:
-    ws = cfg0['widesrc']
+if "widesrc" in cfg0 and cfg0["widesrc"].size > 0:
+    ws = cfg0["widesrc"]
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   Run forward simulation
@@ -103,10 +105,12 @@ cfg = {
     "detparam2": [0, 40, 0, 0],
     "detdir": np.array([[0, 0, -1]]),
     "detpattern": detpattern,
-    "prop": np.array([
-        [0, 0, 1, 1],
-        [0.010, 1, 0, 1.37],
-    ]),
+    "prop": np.array(
+        [
+            [0, 0, 1, 1],
+            [0.010, 1, 0, 1.37],
+        ]
+    ),
     "omega": 0,
 }
 
@@ -122,7 +126,9 @@ detphi_homog = rb.run(cfg)[0]
 
 recon = {}
 recon["node"], _, recon["elem"] = i2m.meshabox([0, 0, 0], [120, 60, 40], 15)
-recon["mapid"], recon["mapweight"] = i2m.tsearchn(recon["node"], recon["elem"], cfg["node"])
+recon["mapid"], recon["mapweight"] = i2m.tsearchn(
+    recon["node"], recon["elem"], cfg["node"]
+)
 recon["bulk"] = {"mua": 0.008, "musp": 1}  # Match MATLAB
 
 nn_recon = recon["node"].shape[0]
@@ -142,9 +148,23 @@ newrecon, resid = rb.run(cfg, recon, detphi0, lambda_=1e-4, maxiter=10)[:2]
 # %   Plot results
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-cutpos, cutval, facedata = i2m.qmeshcut(recon['elem'][:, :4], recon['node'][:, :3], newrecon["prop"][:, 0], 'z = 20')[:3]
-hh = i2m.plotmesh(np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)], facedata.tolist(), subplot=121, hold='on')
-cutpos, cutval, facedata = i2m.qmeshcut(recon['elem'][:, :4], recon['node'][:, :3], newrecon["prop"][:, 0], 'x = 90')[:3]
-i2m.plotmesh(np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)], facedata.tolist(), subplot=122, parent=hh)
+cutpos, cutval, facedata = i2m.qmeshcut(
+    recon["elem"][:, :4], recon["node"][:, :3], newrecon["prop"][:, 0], "z = 20"
+)[:3]
+hh = i2m.plotmesh(
+    np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)],
+    facedata.tolist(),
+    subplot=121,
+    hold="on",
+)
+cutpos, cutval, facedata = i2m.qmeshcut(
+    recon["elem"][:, :4], recon["node"][:, :3], newrecon["prop"][:, 0], "x = 90"
+)[:3]
+i2m.plotmesh(
+    np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)],
+    facedata.tolist(),
+    subplot=122,
+    parent=hh,
+)
 
 plt.show()

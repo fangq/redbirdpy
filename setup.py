@@ -4,8 +4,8 @@ with open("README.md", "r", encoding="utf-8") as fh:
     readme = fh.read()
 
 setup(
-    name="redbird",
-    packages=find_packages(exclude=["tests", "tests.*"]),
+    name="redbirdpy",
+    packages=find_packages(exclude=["test", "test.*"]),
     version="0.1.0",
     license="GPL-3.0",
     description="A Python toolbox for Diffuse Optical Tomography (DOT) and Near-Infrared Spectroscopy (NIRS)",
@@ -14,11 +14,11 @@ setup(
     author="Qianqian Fang",
     author_email="fangqq@gmail.com",
     maintainer="Qianqian Fang",
-    url="https://github.com/fangq/redbird",
+    url="https://github.com/fangq/redbirdpy",
     project_urls={
-        "Bug Tracker": "https://github.com/fangq/redbird/issues",
-        "Documentation": "https://github.com/fangq/redbird#readme",
-        "Source Code": "https://github.com/fangq/redbird",
+        "Bug Tracker": "https://github.com/fangq/redbirdpy/issues",
+        "Documentation": "https://github.com/fangq/redbirdpy#readme",
+        "Source Code": "https://github.com/fangq/redbirdpy",
     },
     keywords=[
         "Diffuse Optical Tomography",
@@ -41,14 +41,14 @@ setup(
         "scipy>=1.0.0",
     ],
     extras_require={
-        "mesh": ["iso2mesh>=0.1.0"],
+        "mesh": ["iso2mesh>=0.5.4"],
         "dev": [
             "pytest>=6.0",
             "pytest-cov>=2.0",
             "flake8>=3.0",
         ],
         "all": [
-            "iso2mesh>=0.1.0",
+            "iso2mesh>=0.5.4",
             "matplotlib>=3.0",
         ],
     },
@@ -77,7 +77,7 @@ setup(
     entry_points={
         "console_scripts": [
             # Add CLI tools here if needed
-            # "redbird=redbird.cli:main",
+            # "redbirdpy=redbirdpy.cli:main",
         ],
     },
 )

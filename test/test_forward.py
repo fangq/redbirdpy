@@ -13,8 +13,7 @@ from scipy import sparse
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
-from redbird import forward, utility
+from redbirdpy import forward, utility
 
 try:
     import iso2mesh as i2m

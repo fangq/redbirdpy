@@ -11,8 +11,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
-from redbird import forward, recon, utility, property as prop_module, solver
+import redbirdpy as rb
+from redbirdpy import forward, recon, utility, property as prop_module, solver
 
 try:
     import iso2mesh as i2m

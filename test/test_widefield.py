@@ -14,8 +14,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
-from redbird import forward, utility, recon
+from redbirdpy import forward, utility, recon
 
 try:
     import iso2mesh as i2m

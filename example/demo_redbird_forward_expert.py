@@ -17,11 +17,14 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
-from redbird import forward, analytical
+import redbirdpy as rb
+from redbirdpy import forward, analytical
+from redbirdpy.solver import femsolve
+
 import iso2mesh as i2m
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
+
 
 def plot_mesh_slice(ax, cutpos, cutval, facedata, xlabel="x", ylabel="y", **kwargs):
     """Helper to plot mesh slice using tricontourf."""
@@ -42,6 +45,7 @@ def plot_mesh_slice(ax, cutpos, cutval, facedata, xlabel="x", ylabel="y", **kwar
     ax.set_ylabel(ylabel)
     ax.set_aspect("equal")
     return tc
+
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   prepare simulation input
@@ -97,7 +101,6 @@ rhs, loc, bary, optode = forward.femrhs(cfg)
 tic = time.perf_counter()
 print("solving for the solution ...")
 # phi, sflag = forward.femsolve(Amat, rhs, method='cg', tol=1e-8, maxiter=200)
-from redbird.solver import femsolve
 phi, flag = femsolve(Amat, rhs)
 print(f"solving forward solutions ... \t{time.perf_counter() - tic:.6f} seconds")
 
@@ -135,12 +138,16 @@ fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 # Plot 1: FEM solution
 ax1 = axes[0, 0]
 cutpos, cutval, facedata = i2m.qmeshcut(
-    cfg["elem"][:, :4], cfg["node"][:, :3],
-    np.log10(np.abs(phi[:nn, sid]) + 1e-20), "y=30"
+    cfg["elem"][:, :4],
+    cfg["node"][:, :3],
+    np.log10(np.abs(phi[:nn, sid]) + 1e-20),
+    "y=30",
 )[:3]
 # For y=const slice, use x,z coordinates (columns 0,2 of cutpos)
 cutpos_2d = cutpos[:, [0, 2]]  # x, z
-tc1 = plot_mesh_slice(ax1, cutpos_2d, cutval, facedata, xlabel="x", ylabel="z", levels=20)
+tc1 = plot_mesh_slice(
+    ax1, cutpos_2d, cutval, facedata, xlabel="x", ylabel="z", levels=20
+)
 ax1.set_xlim([60, 140])
 ax1.set_ylim([0, 60])
 ax1.set_title("FEM Solution (log10)")
@@ -148,11 +155,12 @@ ax1.set_title("FEM Solution (log10)")
 # Plot 2: Analytical solution
 ax2 = axes[0, 1]
 cutpos, cutval_ana, facedata = i2m.qmeshcut(
-    cfg["elem"][:, :4], cfg["node"][:, :3],
-    np.log10(np.abs(phicw) + 1e-20), "y=30"
+    cfg["elem"][:, :4], cfg["node"][:, :3], np.log10(np.abs(phicw) + 1e-20), "y=30"
 )[:3]
 cutpos_2d = cutpos[:, [0, 2]]
-tc2 = plot_mesh_slice(ax2, cutpos_2d, cutval_ana, facedata, xlabel="x", ylabel="z", levels=20)
+tc2 = plot_mesh_slice(
+    ax2, cutpos_2d, cutval_ana, facedata, xlabel="x", ylabel="z", levels=20
+)
 ax2.set_xlim([60, 140])
 ax2.set_ylim([0, 60])
 ax2.set_title("Analytical Solution (log10)")
@@ -164,7 +172,9 @@ cutpos, cutval_diff, facedata = i2m.qmeshcut(
     cfg["elem"][:, :4], cfg["node"][:, :3], dd, "y=30"
 )[:3]
 cutpos_2d = cutpos[:, [0, 2]]
-tc3 = plot_mesh_slice(ax3, cutpos_2d, cutval_diff, facedata, xlabel="x", ylabel="z", levels=20)
+tc3 = plot_mesh_slice(
+    ax3, cutpos_2d, cutval_diff, facedata, xlabel="x", ylabel="z", levels=20
+)
 ax3.set_xlim([60, 140])
 ax3.set_ylim([0, 60])
 ax3.set_title("Difference (FEM - Analytical)")
@@ -186,12 +196,19 @@ plt.tight_layout()
 fig2, ax = plt.subplots(figsize=(10, 6))
 
 dist = rb.getdistance(cfg["srcpos"], cfg["detpos"])
-ax.plot(dist.flatten(), np.log10(np.abs(detval.flatten()) + 1e-20), "b.", label="Original")
+ax.plot(
+    dist.flatten(), np.log10(np.abs(detval.flatten()) + 1e-20), "b.", label="Original"
+)
 
 # Add noise to detector values
 # addnoise signature: addnoise(data, noiselvl, offset) where noiselvl is SNR in dB
 newdata = rb.addnoise(detval, 110, 40)
-ax.plot(dist.flatten(), np.log10(np.abs(newdata.flatten()) + 1e-20), "r.", label="With Noise")
+ax.plot(
+    dist.flatten(),
+    np.log10(np.abs(newdata.flatten()) + 1e-20),
+    "r.",
+    label="With Noise",
+)
 
 ax.set_xlabel("Source-Detector Distance (mm)")
 ax.set_ylabel("log10(Detector Value)")

@@ -18,9 +18,9 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
-from redbird import utility
-from redbird.analytical import semi_infinite_cw
+import redbirdpy as rb
+from redbirdpy.analytical import semi_infinite_cw
+from redbirdpy.utility import meshprep
 
 try:
     import iso2mesh as i2m
@@ -89,7 +89,7 @@ def run_basic_example():
     import time
 
     t_start = time.time()
-    cfg, sd = utility.meshprep(cfg)
+    cfg, sd = meshprep(cfg)
     t_prep = time.time() - t_start
 
     print(f"  Mesh preparation time: {t_prep:.4f} seconds")
@@ -118,7 +118,9 @@ def run_basic_example():
 
     srcpos = cfg["srcpos"][0]
 
-    phi_analytical = semi_infinite_cw(mua, musp, cfg["prop"][1, -1], cfg["prop"][0, -1], srcpos, cfg["node"])
+    phi_analytical = semi_infinite_cw(
+        mua, musp, cfg["prop"][1, -1], cfg["prop"][0, -1], srcpos, cfg["node"]
+    )
 
     print(
         f"  Analytical phi range: [{phi_analytical.min():.6e}, {phi_analytical.max():.6e}]"
@@ -166,11 +168,34 @@ if __name__ == "__main__":
 
     # Optionally plot results
     try:
-        cutpos, phival, facedata = i2m.qmeshcut(cfg['elem'][:, :4], cfg['node'][:, :3], phi[:, 0], 'x = 20')[:3]
-        hh = i2m.plotmesh(np.c_[cutpos, np.log10(np.abs(phival) + 1e-20)], facedata.tolist(), subplot=131, hold='on')
-        cutpos, cutval, facedata = i2m.qmeshcut(cfg['elem'][:, :4], cfg['node'][:, :3], phi_analytical, 'x = 20')[:3]
-        i2m.plotmesh(np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)], facedata.tolist(), subplot=132, parent=hh, hold='on')
-        i2m.plotmesh(np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20) - np.log10(np.abs(phival) + 1e-20)], facedata.tolist(), subplot=133, parent=hh)
+        cutpos, phival, facedata = i2m.qmeshcut(
+            cfg["elem"][:, :4], cfg["node"][:, :3], phi[:, 0], "x = 20"
+        )[:3]
+        hh = i2m.plotmesh(
+            np.c_[cutpos, np.log10(np.abs(phival) + 1e-20)],
+            facedata.tolist(),
+            subplot=131,
+            hold="on",
+        )
+        cutpos, cutval, facedata = i2m.qmeshcut(
+            cfg["elem"][:, :4], cfg["node"][:, :3], phi_analytical, "x = 20"
+        )[:3]
+        i2m.plotmesh(
+            np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)],
+            facedata.tolist(),
+            subplot=132,
+            parent=hh,
+            hold="on",
+        )
+        i2m.plotmesh(
+            np.c_[
+                cutpos,
+                np.log10(np.abs(cutval) + 1e-20) - np.log10(np.abs(phival) + 1e-20),
+            ],
+            facedata.tolist(),
+            subplot=133,
+            parent=hh,
+        )
         plt.show()
 
     except Exception as e:

@@ -17,10 +17,11 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
+import redbirdpy as rb
 import iso2mesh as i2m
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
+
 
 def plot_mesh_slice(ax, cutpos, cutval, facedata, xlabel="x", ylabel="y", **kwargs):
     """Helper to plot mesh slice using tricontourf."""
@@ -41,6 +42,7 @@ def plot_mesh_slice(ax, cutpos, cutval, facedata, xlabel="x", ylabel="y", **kwar
     ax.set_ylabel(ylabel)
     ax.set_aspect("equal")
     return tc
+
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   prepare simulation input
@@ -92,7 +94,9 @@ sd = rb.sdmap(cfg)
 
 # Create coarse reconstruction mesh
 recon = {}
-recon["node"], _, recon["elem"] = i2m.meshabox([40, 0, 0], [160, 120, 60], 20)  # 1-based
+recon["node"], _, recon["elem"] = i2m.meshabox(
+    [40, 0, 0], [160, 120, 60], 20
+)  # 1-based
 recon["mapid"], recon["mapweight"] = i2m.tsearchn(
     recon["node"], recon["elem"], cfg["node"]
 )
@@ -122,7 +126,16 @@ cutpos, cutval, facedata = i2m.qmeshcut(
 )[:3]
 # For z=const slice, use x,y coordinates (columns 0,1 of cutpos)
 cutpos_2d = cutpos[:, :2]  # x, y
-tc1 = plot_mesh_slice(ax1, cutpos_2d, cutval, facedata, xlabel="x (mm)", ylabel="y (mm)", levels=20, cmap="jet")
+tc1 = plot_mesh_slice(
+    ax1,
+    cutpos_2d,
+    cutval,
+    facedata,
+    xlabel="x (mm)",
+    ylabel="y (mm)",
+    levels=20,
+    cmap="jet",
+)
 ax1.set_title("Reconstructed mua (z=20)")
 plt.colorbar(tc1, ax=ax1, label="mua (1/mm)")
 
@@ -133,7 +146,16 @@ cutpos, cutval, facedata = i2m.qmeshcut(
 )[:3]
 # For x=const slice, use y,z coordinates (columns 1,2 of cutpos)
 cutpos_2d = cutpos[:, 1:3]  # y, z
-tc2 = plot_mesh_slice(ax2, cutpos_2d, cutval, facedata, xlabel="y (mm)", ylabel="z (mm)", levels=20, cmap="jet")
+tc2 = plot_mesh_slice(
+    ax2,
+    cutpos_2d,
+    cutval,
+    facedata,
+    xlabel="y (mm)",
+    ylabel="z (mm)",
+    levels=20,
+    cmap="jet",
+)
 ax2.set_title("Reconstructed mua (x=70)")
 plt.colorbar(tc2, ax=ax2, label="mua (1/mm)")
 

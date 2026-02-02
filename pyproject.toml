@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel", "setuptools-scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "redbird"
+name = "redbirdpy"
 version = "0.1.0"
 description = "A Python toolbox for Diffuse Optical Tomography (DOT) and Near-Infrared Spectroscopy (NIRS)"
 readme = "README.md"
@@ -55,42 +55,42 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mesh = ["iso2mesh>=0.1.0"]
+mesh = ["iso2mesh>=0.5.4"]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
     "flake8>=3.0",
 ]
 all = [
-    "iso2mesh>=0.1.0",
+    "iso2mesh>=0.5.4",
     "matplotlib>=3.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/fangq/redbird"
-Documentation = "https://github.com/fangq/redbird#readme"
-Repository = "https://github.com/fangq/redbird"
-"Bug Tracker" = "https://github.com/fangq/redbird/issues"
+Homepage = "https://github.com/fangq/redbirdpy"
+Documentation = "https://github.com/fangq/redbirdpy#readme"
+Repository = "https://github.com/fangq/redbirdpy"
+"Bug Tracker" = "https://github.com/fangq/redbirdpy/issues"
 
 [tool.setuptools]
 zip-safe = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["redbird", "redbird.*"]
-exclude = ["tests", "tests.*"]
+include = ["redbirdpy", "redbirdpy.*"]
+exclude = ["test", "test.*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["test"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 
 [tool.coverage.run]
-source = ["redbird"]
+source = ["redbirdpy"]
 branch = true
-omit = ["tests/*", "setup.py"]
+omit = ["test/*", "setup.py"]
 
 [tool.coverage.report]
 show_missing = true

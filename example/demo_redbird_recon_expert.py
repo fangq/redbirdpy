@@ -18,9 +18,9 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import redbird as rb
-from redbird import forward
-from redbird.recon import reginv, matreform
+import redbirdpy as rb
+from redbirdpy import forward
+from redbirdpy.recon import reginv, matreform
 import iso2mesh as i2m
 import matplotlib.pyplot as plt
 
@@ -107,7 +107,7 @@ for i in range(maxiter):
     tic = time.perf_counter()
 
     # run forward on forward mesh
-    detphi, phi = forward.runforward(cfg, sd=sd, method='blqmr', rhsblock=4, nthread=4)
+    detphi, phi = forward.runforward(cfg, sd=sd, method="blqmr", rhsblock=4, nthread=4)
     # build Jacobian for mua (cfg["elem"] is 1-based, jac handles conversion internally)
     # Jmua shape: (nsd, nn_forward)
     Jmua, _ = forward.jac(sd, phi, cfg["deldotdel"], cfg["elem"], cfg["evol"])
@@ -157,9 +157,23 @@ for i in range(maxiter):
 # %  Plotting results
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-cutpos, cutval, facedata = i2m.qmeshcut(cfg['elem'][:, :4], cfg['node'][:, :3], cfg["prop"][:, 0], 'z = 20')[:3]
-hh = i2m.plotmesh(np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)], facedata.tolist(), subplot=121, hold='on')
-cutpos, cutval, facedata = i2m.qmeshcut(cfg['elem'][:, :4], cfg['node'][:, :3], cfg["prop"][:, 0], 'x = 70')[:3]
-i2m.plotmesh(np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)], facedata.tolist(), subplot=122, parent=hh)
+cutpos, cutval, facedata = i2m.qmeshcut(
+    cfg["elem"][:, :4], cfg["node"][:, :3], cfg["prop"][:, 0], "z = 20"
+)[:3]
+hh = i2m.plotmesh(
+    np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)],
+    facedata.tolist(),
+    subplot=121,
+    hold="on",
+)
+cutpos, cutval, facedata = i2m.qmeshcut(
+    cfg["elem"][:, :4], cfg["node"][:, :3], cfg["prop"][:, 0], "x = 70"
+)[:3]
+i2m.plotmesh(
+    np.c_[cutpos, np.log10(np.abs(cutval) + 1e-20)],
+    facedata.tolist(),
+    subplot=122,
+    parent=hh,
+)
 
 plt.show()
