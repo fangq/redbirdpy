@@ -25,6 +25,58 @@ try:
 except ImportError:
     HAS_ISO2MESH = False
 
+# Module-level cache for mesh data (keyed by mesh parameters)
+_MESH_CACHE = {}
+
+
+def get_cached_mesh(box_min, box_max, max_vol):
+    """
+    Get or create a cached mesh.
+
+    Parameters
+    ----------
+    box_min : list
+        Minimum corner of box [x, y, z]
+    box_max : list
+        Maximum corner of box [x, y, z]
+    max_vol : float
+        Maximum element volume parameter
+
+    Returns
+    -------
+    tuple
+        (node, face, elem) arrays (copies)
+    """
+    global _MESH_CACHE
+
+    # Create hashable key
+    key = (tuple(box_min), tuple(box_max), max_vol)
+
+    if key not in _MESH_CACHE:
+        if not HAS_ISO2MESH:
+            raise unittest.SkipTest("iso2mesh not installed")
+        node, face, elem = i2m.meshabox(box_min, box_max, max_vol)
+        _MESH_CACHE[key] = (node.copy(), face.copy(), elem.copy())
+
+    # Return copies so tests don't interfere with each other
+    node, face, elem = _MESH_CACHE[key]
+    return node.copy(), face.copy(), elem.copy()
+
+
+def setUpModule():
+    """Pre-generate commonly used meshes."""
+    if not HAS_ISO2MESH:
+        return
+    # Pre-cache the most commonly used mesh configurations
+    common_meshes = [
+        ([0, 0, 0], [10, 10, 10], 3),
+        ([0, 0, 0], [60, 60, 30], 10),
+        ([0, 0, 0], [60, 60, 30], 8),
+        ([0, 0, 0], [60, 60, 30], 5),
+    ]
+    for box_min, box_max, max_vol in common_meshes:
+        get_cached_mesh(box_min, box_max, max_vol)
+
 
 @unittest.skipUnless(HAS_ISO2MESH, "iso2mesh not installed")
 class TestIso2meshIndexConvention(unittest.TestCase):
@@ -32,26 +84,26 @@ class TestIso2meshIndexConvention(unittest.TestCase):
 
     def test_meshabox_elem_1based(self):
         """meshabox elem should be 1-based."""
-        node, face, elem = i2m.meshabox([0, 0, 0], [10, 10, 10], 3)
+        node, face, elem = get_cached_mesh([0, 0, 0], [10, 10, 10], 3)
 
         self.assertGreaterEqual(elem.min(), 1, "elem minimum should be >= 1 (1-based)")
 
     def test_meshabox_face_1based(self):
         """meshabox face should be 1-based."""
-        node, face, elem = i2m.meshabox([0, 0, 0], [10, 10, 10], 3)
+        node, face, elem = get_cached_mesh([0, 0, 0], [10, 10, 10], 3)
 
         self.assertGreaterEqual(face.min(), 1, "face minimum should be >= 1 (1-based)")
 
     def test_meshabox_max_valid(self):
         """meshabox indices should not exceed node count."""
-        node, face, elem = i2m.meshabox([0, 0, 0], [10, 10, 10], 3)
+        node, face, elem = get_cached_mesh([0, 0, 0], [10, 10, 10], 3)
 
         self.assertLessEqual(elem.max(), node.shape[0])
         self.assertLessEqual(face.max(), node.shape[0])
 
     def test_volface_1based(self):
         """volface should return 1-based indices."""
-        node, _, elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 10)
+        node, _, elem = get_cached_mesh([0, 0, 0], [60, 60, 30], 10)
 
         # iso2mesh volface may return (face, faceid) tuple
         face_result = i2m.volface(elem[:, :4])
@@ -65,7 +117,7 @@ class TestIso2meshIndexConvention(unittest.TestCase):
 
     def test_meshreorient_preserves_1based(self):
         """meshreorient should preserve 1-based indices."""
-        node, _, elem = i2m.meshabox([0, 0, 0], [10, 10, 10], 3)
+        node, _, elem = get_cached_mesh([0, 0, 0], [10, 10, 10], 3)
 
         elem_new, evol, idx = i2m.meshreorient(node, elem[:, :4])
 
@@ -78,7 +130,7 @@ class TestRedbirdIndexPreservation(unittest.TestCase):
 
     def setUp(self):
         """Create test mesh and configuration."""
-        self.node, self.face, self.elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 10)
+        self.node, self.face, self.elem = get_cached_mesh([0, 0, 0], [60, 60, 30], 10)
 
         self.cfg = {
             "node": self.node,
@@ -135,7 +187,7 @@ class TestEndToEndForward(unittest.TestCase):
 
     def setUp(self):
         """Create test configuration."""
-        node, face, elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 8)
+        node, face, elem = get_cached_mesh([0, 0, 0], [60, 60, 30], 8)
 
         self.cfg = {
             "node": node,
@@ -216,7 +268,7 @@ class TestEndToEndReconstruction(unittest.TestCase):
 
     def setUp(self):
         """Create test configuration with synthetic data."""
-        node, face, elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 10)
+        node, face, elem = get_cached_mesh([0, 0, 0], [60, 60, 30], 10)
 
         self.cfg = {
             "node": node,
@@ -287,7 +339,7 @@ class TestVolumeConsistency(unittest.TestCase):
         box_dims = [60, 60, 30]
         expected_vol = np.prod(box_dims)
 
-        node, _, elem = i2m.meshabox([0, 0, 0], box_dims, 5)
+        node, _, elem = get_cached_mesh([0, 0, 0], box_dims, 5)
 
         cfg = {
             "node": node,
@@ -312,7 +364,7 @@ class TestVolumeConsistency(unittest.TestCase):
 
     def test_nodal_volume_conservation(self):
         """Sum of nodal volumes should equal total volume."""
-        node, _, elem = i2m.meshabox([0, 0, 0], [10, 10, 10], 3)
+        node, _, elem = get_cached_mesh([0, 0, 0], [10, 10, 10], 3)
 
         cfg = {
             "node": node,
@@ -335,7 +387,7 @@ class TestRbRun(unittest.TestCase):
     @unittest.skipUnless(HAS_ISO2MESH, "iso2mesh not installed")
     def test_run_forward_only(self):
         """rb.run with only cfg should run forward."""
-        node, _, elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 10)
+        node, _, elem = get_cached_mesh([0, 0, 0], [60, 60, 30], 10)
 
         cfg = {
             "node": node,

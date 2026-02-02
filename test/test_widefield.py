@@ -24,13 +24,57 @@ try:
 except ImportError:
     HAS_ISO2MESH = False
 
+# Module-level cache for mesh data
+_CACHED_MESH = None
+
+
+def setUpModule():
+    """Create and cache the mesh once for all tests."""
+    global _CACHED_MESH
+
+    if not HAS_ISO2MESH:
+        raise unittest.SkipTest("iso2mesh required for wide-field tests")
+
+    if HAS_ISO2MESH:
+        node, face, elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 8)
+    else:
+        # Manual simple tetrahedron mesh (1-based indices)
+        node = np.array(
+            [
+                [0, 0, 0],
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+                [1, 1, 0],
+                [1, 0, 1],
+                [0, 1, 1],
+                [1, 1, 1],
+            ],
+            dtype=float,
+        )
+        elem = np.array(
+            [[1, 2, 3, 4], [2, 3, 4, 5], [3, 4, 5, 6], [4, 5, 6, 7], [5, 6, 7, 8]],
+            dtype=int,
+        )
+        face = np.array([[1, 2, 3], [1, 2, 4], [1, 3, 4], [2, 3, 4]], dtype=int)
+    _CACHED_MESH = (node.copy(), face.copy(), elem.copy())
+
+
+def create_simple_mesh():
+    """Return a copy of the cached mesh."""
+    global _CACHED_MESH
+    if _CACHED_MESH is None:
+        setUpModule()
+    node, face, elem = _CACHED_MESH
+    return node.copy(), face.copy(), elem.copy()
+
 
 def create_widefield_cfg(srctype="planar"):
     """Create a configuration with wide-field source."""
     if not HAS_ISO2MESH:
         raise unittest.SkipTest("iso2mesh required for wide-field tests")
 
-    node, face, elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 8)
+    node, face, elem = create_simple_mesh()
 
     cfg = {
         "node": node,

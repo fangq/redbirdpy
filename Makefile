@@ -28,13 +28,11 @@ dev:
 	$(PIP) install -e ".[dev,mesh]"
 
 test:
-	$(PYTHON) -m pytest tests/ -v
-
-test-fast:
-	$(PYTHON) -m pytest tests/ -v -x --tb=short
+	$(PYTHON) -m unittest discover -v -s test
 
 coverage:
-	$(PYTHON) -m pytest tests/ --cov=redbird --cov-report=html --cov-report=term
+	$(PYTHON) -m coverage run -m unittest discover -v -s test
+	$(PYTHON) -m coverage html
 	@echo "Coverage report generated in htmlcov/index.html"
 
 lint:

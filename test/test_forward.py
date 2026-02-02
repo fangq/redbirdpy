@@ -24,44 +24,50 @@ except ImportError:
     HAS_ISO2MESH = False
 
 
-def create_test_cfg():
-    """Create a test configuration."""
+# Module-level cache for mesh data
+_CACHED_MESH = None
+
+
+def setUpModule():
+    """Create and cache the mesh once for all tests."""
+    global _CACHED_MESH
     if HAS_ISO2MESH:
         node, face, elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 10)
     else:
-        # Simple manual mesh
+        # Manual simple tetrahedron mesh (1-based indices)
         node = np.array(
             [
                 [0, 0, 0],
-                [60, 0, 0],
-                [60, 60, 0],
-                [0, 60, 0],
-                [0, 0, 30],
-                [60, 0, 30],
-                [60, 60, 30],
-                [0, 60, 30],
-                [30, 30, 15],
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+                [1, 1, 0],
+                [1, 0, 1],
+                [0, 1, 1],
+                [1, 1, 1],
             ],
             dtype=float,
         )
         elem = np.array(
-            [
-                [1, 2, 3, 9],
-                [1, 3, 4, 9],
-                [1, 2, 5, 9],
-                [2, 5, 6, 9],
-                [2, 3, 6, 9],
-                [3, 6, 7, 9],
-                [3, 4, 7, 9],
-                [4, 7, 8, 9],
-                [1, 4, 5, 9],
-                [4, 5, 8, 9],
-                [5, 6, 7, 9],
-                [5, 7, 8, 9],
-            ],
+            [[1, 2, 3, 4], [2, 3, 4, 5], [3, 4, 5, 6], [4, 5, 6, 7], [5, 6, 7, 8]],
             dtype=int,
         )
-        face = np.array([[1, 2, 3], [1, 3, 4]], dtype=int)
+        face = np.array([[1, 2, 3], [1, 2, 4], [1, 3, 4], [2, 3, 4]], dtype=int)
+    _CACHED_MESH = (node.copy(), face.copy(), elem.copy())
+
+
+def create_simple_mesh():
+    """Return a copy of the cached mesh."""
+    global _CACHED_MESH
+    if _CACHED_MESH is None:
+        setUpModule()
+    node, face, elem = _CACHED_MESH
+    return node.copy(), face.copy(), elem.copy()
+
+
+def create_test_cfg():
+    """Create a simple configuration for testing."""
+    node, face, elem = create_simple_mesh()
 
     cfg = {
         "node": node,
@@ -580,6 +586,283 @@ class TestWidefieldRunforward(unittest.TestCase):
         detval, phi = forward.runforward(self.cfg, sd=self.sd)
 
         self.assertTrue(np.all(detval > 0))
+
+
+class TestFemlhsNodeBased(unittest.TestCase):
+    """Test femlhs with node-based properties."""
+
+    def setUp(self):
+        self.cfg = create_test_cfg()
+        self.cfg, _ = utility.meshprep(self.cfg)
+
+    def test_femlhs_node_based_prop(self):
+        """femlhs should handle node-based optical properties."""
+        nn = self.cfg["node"].shape[0]
+
+        # Create node-based properties
+        self.cfg["prop"] = np.column_stack(
+            [
+                0.01 * np.ones(nn),  # mua
+                1.0 * np.ones(nn),  # mus
+                np.zeros(nn),  # g
+                1.37 * np.ones(nn),  # n
+            ]
+        )
+        del self.cfg["seg"]  # Remove segmentation for node-based
+
+        Amat = forward.femlhs(self.cfg, self.cfg["deldotdel"])
+
+        self.assertTrue(sparse.issparse(Amat))
+        self.assertEqual(Amat.shape, (nn, nn))
+
+    def test_femlhs_node_based_with_omega(self):
+        """femlhs with node-based prop and frequency domain."""
+        nn = self.cfg["node"].shape[0]
+
+        self.cfg["prop"] = np.column_stack(
+            [
+                0.01 * np.ones(nn),
+                1.0 * np.ones(nn),
+                np.zeros(nn),
+                1.37 * np.ones(nn),
+            ]
+        )
+        self.cfg["omega"] = 2 * np.pi * 100e6
+        del self.cfg["seg"]
+
+        Amat = forward.femlhs(self.cfg, self.cfg["deldotdel"], mode=1)
+
+        self.assertTrue(np.iscomplexobj(Amat.data))
+
+
+class TestFemlhsMultiwavelength(unittest.TestCase):
+    """Test femlhs with multi-wavelength properties."""
+
+    def setUp(self):
+        self.cfg = create_test_cfg()
+        self.cfg["prop"] = {
+            "690": np.array([[0, 0, 1, 1], [0.012, 1.1, 0, 1.37]]),
+            "830": np.array([[0, 0, 1, 1], [0.008, 0.9, 0, 1.37]]),
+        }
+        self.cfg["reff"] = {"690": 0.493, "830": 0.493}
+        self.cfg["omega"] = {"690": 0, "830": 0}
+        self.cfg, _ = utility.meshprep(self.cfg)
+
+    def test_femlhs_multiwavelength(self):
+        """femlhs should handle multi-wavelength properties."""
+        Amat_690 = forward.femlhs(self.cfg, self.cfg["deldotdel"], wavelength="690")
+        Amat_830 = forward.femlhs(self.cfg, self.cfg["deldotdel"], wavelength="830")
+
+        # Different wavelengths should give different matrices
+        diff = (Amat_690 - Amat_830).data
+        self.assertGreater(np.max(np.abs(diff)), 0)
+
+    def test_femlhs_multiwavelength_fd(self):
+        """femlhs with multi-wavelength and frequency domain."""
+        self.cfg["omega"] = {"690": 2 * np.pi * 100e6, "830": 2 * np.pi * 100e6}
+
+        Amat = forward.femlhs(self.cfg, self.cfg["deldotdel"], wavelength="690", mode=1)
+
+        self.assertTrue(np.iscomplexobj(Amat.data))
+
+
+class TestFemrhsEdgeCases(unittest.TestCase):
+    """Test femrhs edge cases."""
+
+    def setUp(self):
+        self.cfg = create_test_cfg()
+        self.cfg, self.sd = utility.meshprep(self.cfg)
+
+    def test_femrhs_empty_sd(self):
+        """femrhs should handle empty sd mapping."""
+        # Create empty sd dict (no active pairs)
+        empty_sd = {}
+
+        rhs, loc, bary, optode = forward.femrhs(self.cfg, empty_sd)
+
+        # With empty sd, should return minimal structure
+        nn = self.cfg["node"].shape[0]
+        self.assertEqual(rhs.shape[0], nn)
+
+    def test_femrhs_multiwavelength(self):
+        """femrhs should handle multi-wavelength sd mapping."""
+        cfg = self.cfg.copy()
+        cfg["prop"] = {
+            "690": np.array([[0, 0, 1, 1], [0.01, 1, 0, 1.37]]),
+            "830": np.array([[0, 0, 1, 1], [0.01, 1, 0, 1.37]]),
+        }
+        cfg, sd = utility.meshprep(cfg)
+
+        rhs, loc, bary, optode = forward.femrhs(cfg, sd, wv="690")
+
+        self.assertGreater(rhs.shape[1], 0)
+
+
+class TestFemgetdetEdgeCases(unittest.TestCase):
+    """Test femgetdet edge cases."""
+
+    def setUp(self):
+        self.cfg = create_test_cfg()
+        self.cfg, self.sd = utility.meshprep(self.cfg)
+
+    def test_femgetdet_empty_result(self):
+        """femgetdet should return empty array when no valid pairs."""
+        # Create a config and manually clear detpos after meshprep
+        cfg = self.cfg.copy()
+
+        Amat = forward.femlhs(cfg, cfg["deldotdel"])
+        rhs, loc, bary, _ = forward.femrhs(cfg, self.sd)
+        phi, _ = forward.femsolve(Amat, rhs)
+
+        # Manually set detpos to empty to test femgetdet behavior
+        cfg_test = cfg.copy()
+        cfg_test["detpos"] = np.array([]).reshape(0, 3)
+
+        detval = forward.femgetdet(phi, cfg_test, rhs, loc, bary)
+
+        # Should return empty when no detectors defined
+        self.assertEqual(detval.size, 0)
+
+    def test_femgetdet_with_sparse_rhs(self):
+        """femgetdet should handle sparse RHS matrix."""
+        Amat = forward.femlhs(self.cfg, self.cfg["deldotdel"])
+        rhs, loc, bary, _ = forward.femrhs(self.cfg, self.sd)
+        phi, _ = forward.femsolve(Amat, rhs)
+
+        # rhs from femrhs is already sparse
+        self.assertTrue(sparse.issparse(rhs))
+
+        detval = forward.femgetdet(phi, self.cfg, rhs, loc, bary)
+
+        self.assertTrue(np.all(np.isfinite(detval)))
+
+
+class TestJacNumbaFallback(unittest.TestCase):
+    """Test Jacobian computation with and without Numba."""
+
+    def setUp(self):
+        self.cfg = create_test_cfg()
+        self.cfg, self.sd = utility.meshprep(self.cfg)
+
+        Amat = forward.femlhs(self.cfg, self.cfg["deldotdel"])
+        rhs, _, _, _ = forward.femrhs(self.cfg, self.sd)
+        self.phi, _ = forward.femsolve(Amat, rhs)
+
+    def test_jac_consistency(self):
+        """Jacobian should be consistent regardless of Numba availability."""
+        Jmua_n, Jmua_e = forward.jac(
+            self.sd, self.phi, self.cfg["deldotdel"], self.cfg["elem"], self.cfg["evol"]
+        )
+
+        # Check shapes
+        nn = self.cfg["node"].shape[0]
+        ne = self.cfg["elem"].shape[0]
+        nsd = np.sum(self.sd[:, 2] == 1)
+
+        self.assertEqual(Jmua_n.shape, (nsd, nn))
+        self.assertEqual(Jmua_e.shape, (nsd, ne))
+
+    def test_jac_with_inactive_pairs(self):
+        """jac should handle inactive source-detector pairs."""
+        sd = self.sd.copy()
+        sd[0, 2] = 0  # Deactivate first pair
+
+        Jmua_n, Jmua_e = forward.jac(
+            sd, self.phi, self.cfg["deldotdel"], self.cfg["elem"], self.cfg["evol"]
+        )
+
+        nsd = np.sum(sd[:, 2] == 1)
+        self.assertEqual(Jmua_n.shape[0], nsd)
+
+
+class TestJacchromeExtended(unittest.TestCase):
+    """Extended tests for jacchrome function."""
+
+    def test_jacchrome_single_chromophore(self):
+        """jacchrome should handle single chromophore."""
+        nn = 100
+        Jmua = {
+            "690": np.random.randn(5, nn),
+            "830": np.random.randn(5, nn),
+        }
+
+        Jchrome = forward.jacchrome(Jmua, ["hbo"])
+
+        self.assertIn("hbo", Jchrome)
+        self.assertEqual(Jchrome["hbo"].shape, (10, nn))
+
+    def test_jacchrome_all_chromophores(self):
+        """jacchrome should handle all chromophores."""
+        nn = 50
+        Jmua = {
+            "690": np.random.randn(3, nn),
+            "830": np.random.randn(3, nn),
+        }
+
+        chromophores = ["hbo", "hbr", "water"]
+        Jchrome = forward.jacchrome(Jmua, chromophores)
+
+        for ch in chromophores:
+            self.assertIn(ch, Jchrome)
+            self.assertEqual(Jchrome[ch].shape, (6, nn))
+
+    def test_jacchrome_invalid_input(self):
+        """jacchrome should raise error for non-dict input."""
+        Jmua = np.random.randn(5, 100)
+
+        with self.assertRaises(ValueError):
+            forward.jacchrome(Jmua, ["hbo"])
+
+
+class TestRunforwardExtended(unittest.TestCase):
+    """Extended tests for runforward function."""
+
+    def setUp(self):
+        self.cfg = create_test_cfg()
+        self.cfg, self.sd = utility.meshprep(self.cfg)
+
+    def test_runforward_with_rfcw_list(self):
+        """runforward should handle rfcw as list."""
+        detval, phi = forward.runforward(self.cfg, rfcw=[1, 2])
+
+        # Should return dict with mode keys
+        self.assertIsInstance(detval, dict)
+        self.assertIn(1, detval)
+        self.assertIn(2, detval)
+
+    def test_runforward_with_rfcw_single(self):
+        """runforward should handle rfcw as single int."""
+        detval, phi = forward.runforward(self.cfg, rfcw=1)
+
+        # Should return array directly
+        self.assertIsInstance(detval, np.ndarray)
+
+    def test_runforward_precomputed_deldotdel(self):
+        """runforward should use precomputed deldotdel."""
+        # First call computes deldotdel
+        detval1, phi1 = forward.runforward(self.cfg)
+
+        # Second call should reuse it
+        detval2, phi2 = forward.runforward(self.cfg)
+
+        assert_allclose(detval1, detval2)
+
+    def test_runforward_custom_sd(self):
+        """runforward should use custom sd mapping."""
+        custom_sd = self.sd.copy()
+        custom_sd[0, 2] = 0  # Deactivate one pair
+
+        detval, phi = forward.runforward(self.cfg, sd=custom_sd)
+
+        self.assertTrue(np.all(np.isfinite(detval)))
+
+
+class TestC0Constant(unittest.TestCase):
+    """Test speed of light constant."""
+
+    def test_c0_value(self):
+        """C0 should be speed of light in mm/s."""
+        self.assertAlmostEqual(forward.C0, 299792458000.0)
 
 
 if __name__ == "__main__":

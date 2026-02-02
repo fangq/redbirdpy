@@ -303,7 +303,7 @@ def _extract_bulk_from_prop(prop: np.ndarray, cfg: dict) -> np.ndarray:
                 label = seg[0]
 
             # prop row 0 is background, row label+1 is the tissue
-            prop_idx = int(label) + 1
+            prop_idx = int(label)
             if prop.shape[0] > prop_idx:
                 return prop[prop_idx, :]
             else:

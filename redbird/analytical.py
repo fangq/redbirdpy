@@ -483,11 +483,16 @@ def infinite_td(mua, musp, n, srcpos, detpos, t):
     srcpos, detpos = np.atleast_2d(srcpos), np.atleast_2d(detpos)
     t = np.atleast_1d(t)
 
-    r1 = getdistance(srcpos, detpos)
+    r1 = getdistance(srcpos, detpos)  # Shape: (Ndet, Nsrc)
+    r1 = r1.T  # Transpose to (Nsrc, Ndet) - for single src, becomes (1, Ndet)
 
     # Broadcast for time: result shape (len(t), n_det)
-    t = t[:, np.newaxis]
-    s = 4 * D * v * t  # (len(t), 1)
+    t = t[:, np.newaxis]  # Shape: (Ntime, 1)
+    s = 4 * D * v * t  # Shape: (Ntime, 1)
+
+    # r1 has shape (Nsrc, Ndet), for single source (1, Ndet)
+    # After squeeze, r1 becomes (Ndet,) which broadcasts with (Ntime, 1) -> (Ntime, Ndet)
+    r1 = r1.squeeze()  # Remove single-source dimension
 
     # Unit of phi: 1/(mm^2*s)
     phi = (v / (s * np.pi) ** 1.5) * np.exp(-mua * v * t) * np.exp(-(r1**2) / s)
@@ -538,8 +543,8 @@ def semi_infinite_td(mua, musp, n_in, n_out, srcpos, detpos, t):
     src_image = srcpos.copy()
     src_image[:, 2] = srcpos[:, 2] - z0 - 2 * zb
 
-    r1 = getdistance(src_real, detpos)
-    r2 = getdistance(src_image, detpos)
+    r1 = getdistance(src_real, detpos).T.squeeze()  # Transpose and squeeze
+    r2 = getdistance(src_image, detpos).T.squeeze()  # Transpose and squeeze
 
     # Broadcast for time: result shape (len(t), n_det)
     t = t[:, np.newaxis]
