@@ -287,43 +287,22 @@ def _blqmr_parallel(
 
     # Get appropriate multiprocessing context
     ctx = _get_mp_context()
-    try:
-        # mp_context parameter added in Python 3.7
-        with Pool(processes=nthread) as pool:
-            results = pool.map(_solve_blqmr_batch, batches)
+    with Pool(processes=nthread) as pool:
+        results = pool.map(_solve_blqmr_batch, batches)
 
-            for batch_id, start_col, x_batch, batch_flag, niter, relres in results:
-                end_col = start_col + x_batch.shape[1]
-                if is_complex and not np.iscomplexobj(x_batch):
-                    x[:, start_col:end_col] = x_batch.astype(out_dtype)
-                else:
-                    x[:, start_col:end_col] = x_batch
-                max_flag = max(max_flag, batch_flag)
+        for batch_id, start_col, x_batch, batch_flag, niter, relres in results:
+            end_col = start_col + x_batch.shape[1]
+            if is_complex and not np.iscomplexobj(x_batch):
+                x[:, start_col:end_col] = x_batch.astype(out_dtype)
+            else:
+                x[:, start_col:end_col] = x_batch
+            max_flag = max(max_flag, batch_flag)
 
-                if verbose:
-                    print(
-                        f"blqmr [{start_col+1}:{end_col}] (worker {batch_id}): "
-                        f"iter={niter}, relres={relres:.2e}, flag={batch_flag}"
-                    )
-    except TypeError:
-        # Python < 3.7 doesn't support mp_context parameter
-        # Fall back to default context
-        with ProcessPoolExecutor(max_workers=nthread) as executor:
-            results = executor.map(_solve_blqmr_batch, batches)
-
-            for batch_id, start_col, x_batch, batch_flag, niter, relres in results:
-                end_col = start_col + x_batch.shape[1]
-                if is_complex and not np.iscomplexobj(x_batch):
-                    x[:, start_col:end_col] = x_batch.astype(out_dtype)
-                else:
-                    x[:, start_col:end_col] = x_batch
-                max_flag = max(max_flag, batch_flag)
-
-                if verbose:
-                    print(
-                        f"blqmr [{start_col+1}:{end_col}] (worker {batch_id}): "
-                        f"iter={niter}, relres={relres:.2e}, flag={batch_flag}"
-                    )
+            if verbose:
+                print(
+                    f"blqmr [{start_col + 1}:{end_col}] (worker {batch_id}): "
+                    f"iter={niter}, relres={relres:.2e}, flag={batch_flag}"
+                )
 
     return x, max_flag
 
@@ -384,31 +363,16 @@ def _iterative_parallel(
 
     # Get appropriate multiprocessing context
     ctx = _get_mp_context()
-    try:
-        # mp_context parameter added in Python 3.7
-        with ProcessPoolExecutor(max_workers=nthread, mp_context=ctx) as executor:
-            results = executor.map(_solve_iterative_column, tasks)
+    with Pool(processes=nthread) as pool:
+        results = pool.map(_solve_iterative_column, tasks)
 
-            for col_idx, x_col, info in results:
-                x[:, col_idx] = x_col
-                max_flag = max(max_flag, info)
+        for col_idx, x_col, info in results:
+            x[:, col_idx] = x_col
+            max_flag = max(max_flag, info)
 
-                if verbose:
-                    status = "converged" if info == 0 else f"flag={info}"
-                    print(f"{solver_type} [col {col_idx+1}]: {status}")
-    except TypeError:
-        # Python < 3.7 doesn't support mp_context parameter
-        # Fall back to default context
-        with ProcessPoolExecutor(max_workers=nthread) as executor:
-            results = executor.map(_solve_iterative_column, tasks)
-
-            for col_idx, x_col, info in results:
-                x[:, col_idx] = x_col
-                max_flag = max(max_flag, info)
-
-                if verbose:
-                    status = "converged" if info == 0 else f"flag={info}"
-                    print(f"{solver_type} [col {col_idx+1}]: {status}")
+            if verbose:
+                status = "converged" if info == 0 else f"flag={info}"
+                print(f"{solver_type} [col {col_idx + 1}]: {status}")
 
     return x, max_flag
 
