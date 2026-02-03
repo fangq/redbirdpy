@@ -85,7 +85,7 @@ format:
 
 # Run all demo scripts
 demo:
-	cd example && for demo in demo*.py; do $(PYTHON) $$demo 0; done
+	cd example && for demo in demo*.py; do echo $$demo; time $(PYTHON) $$demo 0; done
 
 # Type checking (requires mypy)
 typecheck:

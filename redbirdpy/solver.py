@@ -23,7 +23,7 @@ from scipy import sparse
 from scipy.sparse.linalg import spsolve, cg, gmres, bicgstab, qmr, minres, splu
 from typing import Dict, Tuple, Optional, Union, List, Any
 import warnings
-from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import Pool
 import multiprocessing
 import sys
 
@@ -289,8 +289,8 @@ def _blqmr_parallel(
     ctx = _get_mp_context()
     try:
         # mp_context parameter added in Python 3.7
-        with ProcessPoolExecutor(max_workers=nthread, mp_context=ctx) as executor:
-            results = executor.map(_solve_blqmr_batch, batches)
+        with Pool(processes=nthread) as pool:
+            results = pool.map(_solve_blqmr_batch, batches)
 
             for batch_id, start_col, x_batch, batch_flag, niter, relres in results:
                 end_col = start_col + x_batch.shape[1]

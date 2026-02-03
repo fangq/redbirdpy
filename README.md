@@ -530,7 +530,7 @@ If you use Redbird in your research, please cite:
 
 ## License
 
-GNU General Public License v3.0 or later - see [LICENSE](LICENSE) file for details.
+GNU General Public License v3.0 or later - see [LICENSE](LICENSE.txt) file for details.
 
 ## Author
 
