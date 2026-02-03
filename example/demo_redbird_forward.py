@@ -80,7 +80,7 @@ node_with_data = np.column_stack([cfg["node"], phi_log])
 # plotmesh with slice 'y>60'
 plotmesh(node_with_data, cfg["elem"], "y>60")
 
-plt.show(block=False)
+plt.show(block=(len(sys.argv) == 1))
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %   Print summary

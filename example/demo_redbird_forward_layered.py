@@ -219,4 +219,4 @@ plt.colorbar(tc3, ax=ax3, label="log10(fluence)")
 ax3.legend()
 
 plt.tight_layout()
-plt.show(block=hasattr(sys, 'ps1'))
+plt.show(block=(len(sys.argv) == 1))

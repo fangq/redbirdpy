@@ -215,4 +215,4 @@ ax.set_ylabel("log10(Detector Value)")
 ax.set_title("Detector Readings vs Distance")
 ax.legend()
 
-plt.show(block=False)
+plt.show(block=(len(sys.argv) == 1))

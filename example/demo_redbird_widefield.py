@@ -261,4 +261,4 @@ if HAS_MCX and fcw is not None:
     ]
     ax.legend(handles=legend_elements, loc="upper right")
 
-plt.show(block=False)
+plt.show(block=(len(sys.argv) == 1))

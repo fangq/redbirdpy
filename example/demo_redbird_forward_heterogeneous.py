@@ -197,4 +197,4 @@ ax2.set_title("Forward solution from detector")
 plt.colorbar(tc2, ax=ax2, label="log10(fluence)")
 
 plt.tight_layout()
-plt.show(block=False)
+plt.show(block=(len(sys.argv) == 1))

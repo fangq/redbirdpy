@@ -28,7 +28,7 @@ jobs:
       - name: Run demos
         run: |
           cd example
-          for demo in demo*.py; do python $demo; done
+          for demo in demo*.py; do python $demo 0; done
   deploy:
     runs-on: ubuntu-22.04
     needs: test
