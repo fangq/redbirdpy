@@ -212,7 +212,7 @@ Redbird supports four types of image reconstructions:
 | `femsolve(A, b, method)` | Solve linear system with auto-selection |
 | `solverinfo()` | Query available solver backends |
 
-Supported solvers: `pardiso`, `umfpack`, `cholmod`, `superlu`, `blqmr`, `cg`, `cg+amg`, `gmres`, `bicgstab`
+Supported solvers: `pardiso`, `umfpack`, `cholmod`, `superlu`, `blqmr`, `cg`, `cg+amg`, `gmres`, `minres`, `minres+amg`, `qmr`, `bicgstab`
 
 ### `redbirdpy.analytical` - Analytical Solutions
 
