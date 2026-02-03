@@ -81,7 +81,11 @@ docs:
 
 # Format code (requires black)
 format:
-	$(PYTHON) -m black redbirdpy/ test/
+	$(PYTHON) -m black redbirdpy/ test/ example/*.py setup.py
+
+# Run all demo scripts
+demo:
+	cd example && for demo in demo*.py; do $(PYTHON) $$demo 0; done
 
 # Type checking (requires mypy)
 typecheck:
@@ -99,5 +103,3 @@ info:
 version:
 	@$(PYTHON) -c "import redbirdpy; print(redbirdpy.__version__)"
 
-pretty:
-	$(PYTHON) -m black test/*.py example/*.py redbirdpy/*.py setup.py

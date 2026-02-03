@@ -113,7 +113,7 @@ class TestModuleExports(unittest.TestCase):
     def test_solver_exports(self):
         """Check solver module exports."""
         self.assertTrue(hasattr(rb, "femsolve"))
-        self.assertTrue(hasattr(rb, "get_solver_info"))
+        self.assertTrue(hasattr(rb, "solverinfo"))
 
 
 class TestRunFunction(unittest.TestCase):

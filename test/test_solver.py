@@ -17,16 +17,16 @@ from redbirdpy import solver
 
 
 class TestGetSolverInfo(unittest.TestCase):
-    """Test solver.get_solver_info function."""
+    """Test solver.solverinfo function."""
 
-    def test_get_solver_info_returns_dict(self):
-        """get_solver_info should return dictionary."""
-        info = solver.get_solver_info()
+    def test_solverinfo_returns_dict(self):
+        """solverinfo should return dictionary."""
+        info = solver.solverinfo()
         self.assertIsInstance(info, dict)
 
-    def test_get_solver_info_keys(self):
-        """get_solver_info should have expected keys."""
-        info = solver.get_solver_info()
+    def test_solverinfo_keys(self):
+        """solverinfo should have expected keys."""
+        info = solver.solverinfo()
 
         expected_keys = [
             "direct_solver",
@@ -39,9 +39,9 @@ class TestGetSolverInfo(unittest.TestCase):
         for key in expected_keys:
             self.assertIn(key, info)
 
-    def test_get_solver_info_cpu_count(self):
-        """get_solver_info should report CPU count."""
-        info = solver.get_solver_info()
+    def test_solverinfo_cpu_count(self):
+        """solverinfo should report CPU count."""
+        info = solver.solverinfo()
         self.assertIn("cpu_count", info)
         self.assertGreater(info["cpu_count"], 0)
 
@@ -251,7 +251,7 @@ class TestFemsolveBlqmr(unittest.TestCase):
 
     def test_femsolve_blqmr(self):
         """femsolve with blqmr should solve if available."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -262,7 +262,7 @@ class TestFemsolveBlqmr(unittest.TestCase):
 
     def test_femsolve_blqmr_multiple_rhs(self):
         """femsolve blqmr should handle multiple RHS."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -284,7 +284,7 @@ class TestFemsolveAMG(unittest.TestCase):
 
     def test_femsolve_cg_amg(self):
         """femsolve with cg+amg should solve if pyamg available."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_amg", False):
             self.skipTest("PyAMG not available")
@@ -306,7 +306,7 @@ class TestFemsolveUmfpack(unittest.TestCase):
 
     def test_femsolve_umfpack(self):
         """femsolve with umfpack should solve if available."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_umfpack", False):
             self.skipTest("UMFPACK not available")
@@ -362,7 +362,7 @@ class TestFemsolvePardisoComplex(unittest.TestCase):
 
     def test_femsolve_pardiso_complex(self):
         """femsolve pardiso should handle complex via real formulation."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_pardiso", False):
             self.skipTest("Pardiso not available")
@@ -378,7 +378,7 @@ class TestFemsolvePardisoComplex(unittest.TestCase):
 
     def test_femsolve_pardiso_complex_multiple_rhs(self):
         """femsolve pardiso complex with multiple RHS."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_pardiso", False):
             self.skipTest("Pardiso not available")
@@ -401,7 +401,7 @@ class TestFemsolveUmfpackExtended(unittest.TestCase):
 
     def test_femsolve_umfpack_multiple_rhs_mixed(self):
         """femsolve umfpack with mixed zero/nonzero RHS columns."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_umfpack", False):
             self.skipTest("UMFPACK not available")
@@ -416,7 +416,7 @@ class TestFemsolveUmfpackExtended(unittest.TestCase):
 
     def test_femsolve_umfpack_complex(self):
         """femsolve umfpack with complex matrix."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_umfpack", False):
             self.skipTest("UMFPACK not available")
@@ -445,7 +445,7 @@ class TestFemsolveChomod(unittest.TestCase):
 
     def test_femsolve_cholmod_spd(self):
         """femsolve cholmod should solve SPD system."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_cholmod", False):
             self.skipTest("CHOLMOD not available")
@@ -458,7 +458,7 @@ class TestFemsolveChomod(unittest.TestCase):
 
     def test_femsolve_cholmod_non_spd_fallback(self):
         """femsolve cholmod should fallback for non-SPD."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_cholmod", False):
             self.skipTest("CHOLMOD not available")
@@ -475,7 +475,7 @@ class TestFemsolveChomod(unittest.TestCase):
 
     def test_femsolve_cholmod_complex_fallback(self):
         """femsolve cholmod should fallback for complex matrix."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_cholmod", False):
             self.skipTest("CHOLMOD not available")
@@ -502,7 +502,7 @@ class TestFemsolveBlqmrExtended(unittest.TestCase):
 
     def test_femsolve_blqmr_batched(self):
         """femsolve blqmr with batch processing."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -515,7 +515,7 @@ class TestFemsolveBlqmrExtended(unittest.TestCase):
 
     def test_femsolve_blqmr_single_rhs(self):
         """femsolve blqmr with single RHS (no batching)."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -526,7 +526,7 @@ class TestFemsolveBlqmrExtended(unittest.TestCase):
 
     def test_femsolve_blqmr_large_rhsblock(self):
         """femsolve blqmr with rhsblock larger than ncol."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -543,7 +543,7 @@ class TestFemsolveBlqmrExtended(unittest.TestCase):
 
     def test_femsolve_blqmr_with_precond(self):
         """femsolve blqmr with preconditioning."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -567,7 +567,7 @@ class TestFemsolveAMGExtended(unittest.TestCase):
 
     def test_femsolve_cg_amg_multiple_rhs(self):
         """femsolve cg+amg with multiple RHS."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_amg", False):
             self.skipTest("PyAMG not available")
@@ -578,7 +578,7 @@ class TestFemsolveAMGExtended(unittest.TestCase):
 
     def test_femsolve_cg_amg_complex_fallback(self):
         """femsolve cg+amg should fallback for complex matrix."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_amg", False):
             self.skipTest("PyAMG not available")
@@ -716,11 +716,11 @@ class TestFemsolveVerbose(unittest.TestCase):
 
 
 class TestGetSolverInfoComplete(unittest.TestCase):
-    """Complete tests for get_solver_info."""
+    """Complete tests for solverinfo."""
 
     def test_solver_info_blqmr_details(self):
-        """get_solver_info should report BLQMR details if available."""
-        info = solver.get_solver_info()
+        """solverinfo should report BLQMR details if available."""
+        info = solver.solverinfo()
 
         if info.get("has_blqmr", False):
             self.assertIn("blqmr_backend", info)
@@ -728,8 +728,8 @@ class TestGetSolverInfoComplete(unittest.TestCase):
             self.assertIn("blqmr", info["complex_iterative"])
 
     def test_solver_info_complex_direct(self):
-        """get_solver_info should report complex direct solver."""
-        info = solver.get_solver_info()
+        """solverinfo should report complex direct solver."""
+        info = solver.solverinfo()
 
         self.assertIn("complex_direct", info)
         self.assertIn(info["complex_direct"], ["umfpack", "superlu"])
@@ -745,7 +745,7 @@ class TestFemsolvePardisoFallback(unittest.TestCase):
 
     def test_femsolve_pardiso_fallback_warning(self):
         """femsolve should warn and fallback when pardiso unavailable."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if info.get("has_pardiso", False):
             self.skipTest("Pardiso is available, can't test fallback")
@@ -765,7 +765,7 @@ class TestFemsolveUmfpackFallback(unittest.TestCase):
 
     def test_femsolve_umfpack_fallback_warning(self):
         """femsolve should warn and fallback when umfpack unavailable."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if info.get("has_umfpack", False):
             self.skipTest("UMFPACK is available, can't test fallback")
@@ -785,7 +785,7 @@ class TestFemsolveBlqmrFallback(unittest.TestCase):
 
     def test_femsolve_blqmr_fallback_warning(self):
         """femsolve should warn and fallback when blqmr unavailable."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if info.get("has_blqmr", False):
             self.skipTest("BLQMR is available, can't test fallback")
@@ -805,7 +805,7 @@ class TestFemsolveAMGFallback(unittest.TestCase):
 
     def test_femsolve_cg_amg_fallback_warning(self):
         """femsolve should warn and fallback when pyamg unavailable."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if info.get("has_amg", False):
             self.skipTest("PyAMG is available, can't test fallback")
@@ -825,7 +825,7 @@ class TestFemsolveChomodFallback(unittest.TestCase):
 
     def test_femsolve_cholmod_fallback_warning(self):
         """femsolve should warn and fallback when cholmod unavailable."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if info.get("has_cholmod", False):
             self.skipTest("CHOLMOD is available, can't test fallback")
@@ -871,7 +871,7 @@ class TestFemsolveUmfpackMultipleRHS(unittest.TestCase):
 
     def test_femsolve_umfpack_all_nonzero_cols(self):
         """femsolve umfpack with all nonzero RHS columns."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_umfpack", False):
             self.skipTest("UMFPACK not available")
@@ -887,7 +887,7 @@ class TestFemsolveUmfpackMultipleRHS(unittest.TestCase):
 
     def test_femsolve_umfpack_single_rhs(self):
         """femsolve umfpack with single RHS."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_umfpack", False):
             self.skipTest("UMFPACK not available")
@@ -907,7 +907,7 @@ class TestFemsolveChomodMultipleRHS(unittest.TestCase):
 
     def test_femsolve_cholmod_multiple_rhs(self):
         """femsolve cholmod with multiple RHS columns."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_cholmod", False):
             self.skipTest("CHOLMOD not available")
@@ -924,7 +924,7 @@ class TestFemsolveChomodMultipleRHS(unittest.TestCase):
 
     def test_femsolve_cholmod_zero_column(self):
         """femsolve cholmod should skip zero RHS columns."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_cholmod", False):
             self.skipTest("CHOLMOD not available")
@@ -981,7 +981,7 @@ class TestFemsolveBlqmrVerbose(unittest.TestCase):
 
     def test_femsolve_blqmr_verbose_single_batch(self):
         """femsolve blqmr verbose with single batch."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -997,7 +997,7 @@ class TestFemsolveBlqmrVerbose(unittest.TestCase):
 
     def test_femsolve_blqmr_verbose_sequential_batches(self):
         """femsolve blqmr verbose with sequential batch processing."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1019,7 +1019,7 @@ class TestFemsolveBlqmrParallel(unittest.TestCase):
 
     def test_femsolve_blqmr_parallel_batches(self):
         """femsolve blqmr with parallel batch processing."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1035,7 +1035,7 @@ class TestFemsolveBlqmrParallel(unittest.TestCase):
 
     def test_femsolve_blqmr_parallel_verbose(self):
         """femsolve blqmr parallel with verbose output."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1057,7 +1057,7 @@ class TestFemsolveBlqmrWithX0(unittest.TestCase):
 
     def test_femsolve_blqmr_with_x0(self):
         """femsolve blqmr with initial guess x0."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1080,7 +1080,7 @@ class TestFemsolveBlqmrRhsblockZero(unittest.TestCase):
 
     def test_femsolve_blqmr_rhsblock_zero(self):
         """femsolve blqmr with rhsblock=0 should use single batch."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1100,7 +1100,7 @@ class TestFemsolveAMGVerbose(unittest.TestCase):
 
     def test_femsolve_cg_amg_verbose(self):
         """femsolve cg+amg with verbose output."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_amg", False):
             self.skipTest("PyAMG not available")
@@ -1122,7 +1122,7 @@ class TestFemsolveAMGParallel(unittest.TestCase):
 
     def test_femsolve_cg_amg_parallel(self):
         """femsolve cg+amg with parallel execution."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_amg", False):
             self.skipTest("PyAMG not available")
@@ -1250,7 +1250,7 @@ class TestFemsolvePardisoReal(unittest.TestCase):
 
     def test_femsolve_pardiso_real(self):
         """femsolve pardiso with real matrix."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_pardiso", False):
             self.skipTest("Pardiso not available")
@@ -1268,7 +1268,7 @@ class TestFemsolvePardisoReal(unittest.TestCase):
 
     def test_femsolve_pardiso_real_multiple_rhs(self):
         """femsolve pardiso with multiple real RHS."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_pardiso", False):
             self.skipTest("Pardiso not available")
@@ -1314,7 +1314,7 @@ class TestFemsolveComplexBlqmr(unittest.TestCase):
 
     def test_femsolve_blqmr_complex(self):
         """femsolve blqmr with complex system."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1332,7 +1332,7 @@ class TestFemsolveComplexBlqmr(unittest.TestCase):
 
     def test_femsolve_blqmr_complex_parallel(self):
         """femsolve blqmr complex with parallel processing."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1365,7 +1365,7 @@ class TestFemsolveDirectVerbose(unittest.TestCase):
 
     def test_femsolve_umfpack_verbose(self):
         """femsolve umfpack with verbose output."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_umfpack", False):
             self.skipTest("UMFPACK not available")
@@ -1380,7 +1380,7 @@ class TestFemsolveDirectVerbose(unittest.TestCase):
 
     def test_femsolve_cholmod_verbose(self):
         """femsolve cholmod with verbose output."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_cholmod", False):
             self.skipTest("CHOLMOD not available")
@@ -1400,7 +1400,7 @@ class TestFemsolveAutoSelectionExtended(unittest.TestCase):
 
     def test_femsolve_auto_spd_with_amg(self):
         """femsolve auto should prefer cg+amg for large SPD when available."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         n = 15000  # Large enough to trigger iterative
         A = sparse.diags([1, -2, 1], [-1, 0, 1], shape=(n, n), format="csr")
@@ -1498,7 +1498,7 @@ class TestFemsolveBlqmrWorkspace(unittest.TestCase):
 
     def test_femsolve_blqmr_with_workspace(self):
         """femsolve blqmr with pre-allocated workspace."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1523,7 +1523,7 @@ class TestFemsolveBlqmrPreconditioners(unittest.TestCase):
     """Test BLQMR with different preconditioner types."""
 
     def setUp(self):
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
 
@@ -1575,7 +1575,7 @@ class TestFemsolveBlqmrCustomPrecond(unittest.TestCase):
 
     def test_femsolve_blqmr_with_m1_m2(self):
         """femsolve blqmr with custom M1 and M2."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1601,7 +1601,7 @@ class TestFemsolvePardisoVerbose(unittest.TestCase):
 
     def test_femsolve_pardiso_verbose(self):
         """femsolve pardiso with verbose output."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_pardiso", False):
             self.skipTest("Pardiso not available")
@@ -1617,7 +1617,7 @@ class TestFemsolvePardisoVerbose(unittest.TestCase):
 
     def test_femsolve_pardiso_complex_verbose(self):
         """femsolve pardiso complex with verbose output."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_pardiso", False):
             self.skipTest("Pardiso not available")
@@ -1637,7 +1637,7 @@ class TestFemsolveAMGZeroColumns(unittest.TestCase):
 
     def test_femsolve_cg_amg_zero_column(self):
         """femsolve cg+amg should skip zero RHS columns."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_amg", False):
             self.skipTest("PyAMG not available")
@@ -1742,7 +1742,7 @@ class TestFemsolveBlqmrMixedRealComplex(unittest.TestCase):
 
     def test_femsolve_blqmr_real_matrix_complex_rhs(self):
         """femsolve blqmr with real matrix and complex RHS."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_blqmr", False):
             self.skipTest("BLQMR not available")
@@ -1789,7 +1789,7 @@ class TestFemsolveComplexRealFormulation(unittest.TestCase):
 
     def test_femsolve_pardiso_complex_accuracy(self):
         """femsolve pardiso complex should give accurate results."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_pardiso", False):
             self.skipTest("Pardiso not available")
@@ -1843,7 +1843,7 @@ class TestFemsolveChomodExtended(unittest.TestCase):
 
     def test_femsolve_cholmod_verbose(self):
         """femsolve cholmod with verbose output."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_cholmod", False):
             self.skipTest("CHOLMOD not available")
@@ -1859,7 +1859,7 @@ class TestFemsolveChomodExtended(unittest.TestCase):
 
     def test_femsolve_cholmod_all_zero_rhs(self):
         """femsolve cholmod with all-zero RHS columns."""
-        info = solver.get_solver_info()
+        info = solver.solverinfo()
 
         if not info.get("has_cholmod", False):
             self.skipTest("CHOLMOD not available")
