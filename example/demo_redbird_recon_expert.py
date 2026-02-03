@@ -176,4 +176,4 @@ i2m.plotmesh(
     parent=hh,
 )
 
-plt.show()
+plt.show(block=False)

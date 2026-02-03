@@ -1,10 +1,10 @@
-![Redbird Banner](./doc/images/redbird_banner.png)
+![Redbird Banner](https://raw.githubusercontent.com/fangq/redbird/refs/heads/master/doc/images/redbird_banner.png)
 
 # RedbirdPy - A Model-Based Diffuse Optical Imaging Toolbox for Python
 
-* **Copyright**: (C) Qianqian Fang (2005–2025) \<q.fang at neu.edu>
+* **Copyright**: (C) Qianqian Fang (2005–2026) \<q.fang at neu.edu>
 * **License**: GNU Public License V3 or later
-* **Version**: 0.1.0
+* **Version**: 0.2.0 (Flamingo)
 * **GitHub**: [https://github.com/fangq/redbirdpy](https://github.com/fangq/redbirdpy)
 * **Acknowledgement**: This project is supported by the US National Institute of Health (NIH)
   grant [R01-CA204443](https://reporter.nih.gov/project-details/10982160)
@@ -33,7 +33,7 @@
 
 ## Introduction
 
-**Redbird-Python** is a Python translation of the [Redbird MATLAB toolbox](https://github.com/fangq/redbird) for diffuse optical imaging (DOI) and diffuse optical tomography (DOT). It provides a fast, experimentally-validated forward solver for the diffusion equation using the finite-element method (FEM), along with advanced non-linear image reconstruction algorithms.
+**RedbirdPy** is a Python translation of the [Redbird MATLAB toolbox](https://github.com/fangq/redbird) for diffuse optical imaging (DOI) and diffuse optical tomography (DOT). It provides a fast, experimentally-validated forward solver for the diffusion equation using the finite-element method (FEM), along with advanced non-linear image reconstruction algorithms.
 
 Redbird is the result of over two decades of active research in DOT and image reconstruction. It has been the core data analysis tool in numerous publications related to optical breast imaging, prior-guided reconstruction techniques, multi-modal imaging, and wide-field DOT systems.
 
@@ -49,7 +49,7 @@ Redbird is the result of over two decades of active research in DOT and image re
 
 ### Validation
 
-The forward solver is carefully validated against Monte Carlo solvers—**MCX** and **MMC**. The diffusion approximation is valid in high-scattering media where the reduced scattering coefficient (μs') is much greater than the absorption coefficient (μa).
+The forward solver is carefully validated against Monte Carlo solvers - **MCX** and **MMC**. The diffusion approximation is valid in high-scattering media where the reduced scattering coefficient (μs') is much greater than the absorption coefficient (μa).
 
 ---
 
@@ -57,15 +57,15 @@ The forward solver is carefully validated against Monte Carlo solvers—**MCX** 
 
 ### Requirements
 
-- Python 3.8+
+- Python 3.6+
 - NumPy
 - SciPy
+- Iso2Mesh
 
 ### Basic Installation
 
 ```bash
 pip install numpy scipy
-# For mesh generation
 pip install iso2mesh  # or from https://github.com/NeuroJSON/pyiso2mesh
 ```
 
@@ -76,7 +76,7 @@ pip install iso2mesh  # or from https://github.com/NeuroJSON/pyiso2mesh
 pip install numba          # JIT compilation
 
 # For accelerated solvers
-pip install blocksolver  # or from https://github.com/fangq/
+pip install blocksolver  # or from https://github.com/fangq/blit
 
 # For other linear solvers
 pip install pypardiso      # Intel MKL PARDISO (fastest direct solver)
@@ -92,7 +92,7 @@ cd redbirdpy
 pip install -e .
 ```
 
-Or simply add the `redbirdpy` folder to your Python path.
+Or simply import `redbirdpy` from inside the repository's top folder.
 
 ---
 
@@ -146,12 +146,12 @@ Redbird performs two main tasks:
 
 Redbird supports four types of image reconstructions:
 
-| Mode | Description |
-|------|-------------|
-| **Bulk Fitting** | Estimate single set of properties for entire domain |
-| **Segmented** | One property set per labeled tissue segment ("hard-prior") |
+| Mode | Description                                                   |
+|------|---------------------------------------------------------------|
+| **Bulk Fitting** | Estimate single set of properties for the entire domain       |
+| **Segmented** | One property set per labeled tissue segment ("hard-prior")    |
 | **Soft-Prior** | Spatial priors as soft constraints (Laplacian, compositional) |
-| **Unconstrained** | Independent properties per node with Tikhonov regularization |
+| **Unconstrained** | Independent properties per node with Tikhonov regularization  |
 
 ---
 
@@ -340,8 +340,8 @@ Configure similarly using `dettype`, `detparam1`, `detparam2`, `detpattern`.
 
 ```python
 cfg['prop'] = {
-    '690': np.array([[0, 0, 1, 1], [0.012, 1.1, 0, 1.37]]),
-    '830': np.array([[0, 0, 1, 1], [0.008, 0.9, 0, 1.37]])
+    '690': [[0, 0, 1, 1], [0.012, 1.1, 0, 1.37]],
+    '830': [[0, 0, 1, 1], [0.008, 0.9, 0, 1.37]]
 }
 ```
 
@@ -443,7 +443,7 @@ recon['prop'] = np.tile(cfg['prop'][1,:], (recon['node'].shape[0], 1))
 newrecon, resid = rb.run(cfg, recon, detphi0, lambda_=1e-4)[:2]
 ```
 
-### Wide-Field Reconstruction
+### Wide-Field Forward and Reconstruction
 
 ```python
 # Create illumination patterns
@@ -535,7 +535,7 @@ GNU General Public License v3.0 or later - see [LICENSE](LICENSE) file for detai
 ## Author
 
 **Qianqian Fang** (q.fang@neu.edu)
-Computational Optics & Translational Imaging Lab
+Computational Optics & Translational Imaging (COTI) Lab
 Northeastern University
 
-Python translation based on the [Redbird MATLAB toolbox](https://github.com/fangq/redbirdpy).
+Python translation based on the [Redbird MATLAB toolbox](https://github.com/fangq/redbird).

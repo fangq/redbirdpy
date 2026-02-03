@@ -196,7 +196,7 @@ if __name__ == "__main__":
             subplot=133,
             parent=hh,
         )
-        plt.show()
+        plt.show(block=False)
 
     except Exception as e:
         print(f"Plotting skipped: {e}")

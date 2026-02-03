@@ -169,4 +169,4 @@ ax.set_ylabel("Residual")
 ax.set_title("Reconstruction Convergence")
 ax.grid(True)
 
-plt.show()
+plt.show(block=False)

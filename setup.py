@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name="redbirdpy",
     packages=find_packages(exclude=["test", "test.*"]),
-    version="0.1.0",
+    version="0.2.0",
     license="GPL-3.0",
     description="A Python toolbox for Diffuse Optical Tomography (DOT) and Near-Infrared Spectroscopy (NIRS)",
     long_description=readme,
@@ -39,21 +39,20 @@ setup(
     install_requires=[
         "numpy>=1.15.0",
         "scipy>=1.0.0",
+        "iso2mesh>=0.5.0",
     ],
     extras_require={
-        "mesh": ["iso2mesh>=0.5.4"],
         "dev": [
             "pytest>=6.0",
             "pytest-cov>=2.0",
             "flake8>=3.0",
         ],
         "all": [
-            "iso2mesh>=0.5.4",
             "matplotlib>=3.0",
         ],
     },
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
         "Intended Audience :: Developers",
         "Intended Audience :: Healthcare Industry",

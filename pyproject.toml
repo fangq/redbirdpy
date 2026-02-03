@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "redbirdpy"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Python toolbox for Diffuse Optical Tomography (DOT) and Near-Infrared Spectroscopy (NIRS)"
 readme = "README.md"
 license = {text = "GPL-3.0"}
@@ -29,7 +29,7 @@ keywords = [
     "Tissue Optics",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
     "Intended Audience :: Healthcare Industry",
@@ -52,17 +52,16 @@ requires-python = ">=3.6"
 dependencies = [
     "numpy>=1.15.0",
     "scipy>=1.0.0",
+    "iso2mesh>=0.5.0",
 ]
 
 [project.optional-dependencies]
-mesh = ["iso2mesh>=0.5.4"]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
     "flake8>=3.0",
 ]
 all = [
-    "iso2mesh>=0.5.4",
     "matplotlib>=3.0",
 ]
 
