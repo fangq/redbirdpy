@@ -467,6 +467,8 @@ def femsolve(
     if method == "auto":
         if n < 10000:
             method = "direct"
+        elif _HAS_BLQMR and BLQMR_EXT:
+            method = "blqmr"
         elif is_spd and _HAS_AMG and not is_complex:
             method = "cg+amg"
         else:
@@ -591,8 +593,8 @@ def femsolve(
 
     elif method == "blqmr":
         if not _HAS_BLQMR:
-            warnings.warn("blocksolver not available, falling back to gmres")
-            return femsolve(Amat, rhs, method="gmres", **kwargs)
+            warnings.warn("blocksolver not available, falling back to direct")
+            return femsolve(Amat, rhs, method="direct", **kwargs)
 
         M1 = kwargs.get("M1", None)
         M2 = kwargs.get("M2", None)

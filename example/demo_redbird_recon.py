@@ -111,7 +111,9 @@ cfg["prop"] = np.tile(cfg["prop"][1, :], (cfg["node"].shape[0], 1))
 cfg.pop("seg", None)
 
 # Run streamlined image reconstruction
-newrecon, resid, newcfg = rb.run(cfg, recon, detphi0, sd, lambda_=1e-4)[:3]
+newrecon, resid, newcfg = rb.run(cfg, recon, detphi0, sd, lambda_=1e-4, verbose=True)[
+    :3
+]
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 # %  Plotting results

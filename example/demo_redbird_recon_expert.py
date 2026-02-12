@@ -110,7 +110,7 @@ if __name__ == "__main__":
         tic = time.perf_counter()
 
         # run forward on forward mesh
-        detphi, phi = forward.runforward(cfg, sd=sd, method="blqmr", rhsblock=4)
+        detphi, phi = forward.runforward(cfg, sd=sd, verbose=True)
         # build Jacobian for mua (cfg["elem"] is 1-based, jac handles conversion internally)
         # Jmua shape: (nsd, nn_forward)
         Jmua, _ = forward.jac(sd, phi, cfg["deldotdel"], cfg["elem"], cfg["evol"])

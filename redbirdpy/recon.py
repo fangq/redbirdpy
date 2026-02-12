@@ -32,6 +32,7 @@ from typing import Dict, Tuple, Optional, Union, List, Any
 import warnings
 
 from .forward import runforward, jac, jacchrome
+from .solver import femsolve
 from .utility import sdmap, meshinterp
 from .property import updateprop
 
@@ -85,6 +86,7 @@ def runrecon(
     reform = kwargs.get("reform", "real")
     solverflag = kwargs.get("solverflag", {})
     rfcw = kwargs.get("rfcw", [1])
+    solvermethod = kwargs.get("method", "auto")
     prior_type = kwargs.get("prior", "")
 
     if isinstance(rfcw, int):
@@ -148,7 +150,7 @@ def runrecon(
             cfg["prop"] = updateprop(cfg)
 
         # Run forward simulation
-        detphi, phi = runforward(cfg, solverflag=solverflag, sd=sd, rfcw=rfcw)
+        detphi, phi = runforward(cfg, solverflag=solverflag, sd=sd, rfcw=rfcw, **kwargs)
 
         # Build Jacobians
         wavelengths = [""]
@@ -236,7 +238,9 @@ def runrecon(
         Jflat = Jflat * blockscale
 
         # Solve inverse problem
-        dmu = reginv(Jflat, misfit, lambda_, Aregu, blocks, **solverflag)
+        dmu = reginv(
+            Jflat, misfit, lambda_, Aregu, blocks, method=solvermethod, **solverflag
+        )
         dmu = dmu * blockscale
 
         # Parse update and apply to recon structure
@@ -412,10 +416,7 @@ def reginvover(
     # Normalize and solve
     Hess_norm, Gdiag = _normalize_diag(Hess)
 
-    if sparse.issparse(Hess_norm):
-        res = Gdiag * spsolve(Hess_norm, Gdiag * rhs_proj)
-    else:
-        res = Gdiag * np.linalg.solve(Hess_norm, Gdiag * rhs_proj)
+    res = Gdiag * femsolve(sparse.csc_matrix(Hess_norm), Gdiag * rhs_proj, **kwargs)[0]
 
     # Restore full-length result
     if len(idx0) < length0:
@@ -477,10 +478,7 @@ def reginvunder(
     # Normalize and solve
     Hess_norm, Gdiag = _normalize_diag(Hess)
 
-    if sparse.issparse(Hess_norm):
-        y = Gdiag * spsolve(Hess_norm, Gdiag * rhs)
-    else:
-        y = Gdiag * np.linalg.solve(Hess_norm, Gdiag * rhs)
+    y = Gdiag * femsolve(sparse.csc_matrix(Hess_norm), Gdiag * rhs, **kwargs)[0]
 
     # Transform back to primal space
     if invR is not None:
