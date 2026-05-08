@@ -158,17 +158,23 @@ def femlhs(
             seg_idx = np.clip(seg.astype(np.int32), 0, props.shape[0] - 1)
             eps_r = props[seg_idx, 0]
             sigma = props[seg_idx, 1]
-            permea = props[seg_idx, 2] if props.shape[1] >= 3 else np.full_like(eps_r, 4 * np.pi * 1e-10)
+            permea = (
+                props[seg_idx, 2]
+                if props.shape[1] >= 3
+                else np.full_like(eps_r, 4 * np.pi * 1e-10)
+            )
         else:
             raise ValueError("Property format not recognized")
         avol = np.ones_like(eps_r)
-        breal = -(omega ** 2) * permea * EPS0_MM * eps_r
+        breal = -(omega**2) * permea * EPS0_MM * eps_r
         bimag = omega * permea * sigma
         is_complex = True
     else:
         if props.shape[0] == nn or props.shape[0] == ne:
             mua = props[:, 0]
-            musp = props[:, 1] * (1 - props[:, 2]) if props.shape[1] >= 3 else props[:, 1]
+            musp = (
+                props[:, 1] * (1 - props[:, 2]) if props.shape[1] >= 3 else props[:, 1]
+            )
             nref = props[:, 3] if props.shape[1] >= 4 else 1.37
         elif seg is not None:
             seg_idx = np.clip(seg.astype(np.int32), 0, props.shape[0] - 1)
@@ -234,13 +240,17 @@ def femlhs(
         w2 = (1 / 60) * (np.diag([2, 2, 2, 2]) + 1)
 
         breal_e = breal[elem_0]
-        bimag_e = bimag[elem_0] if hasattr(bimag, "__len__") else np.full(elem_0.shape, bimag)
+        bimag_e = (
+            bimag[elem_0] if hasattr(bimag, "__len__") else np.full(elem_0.shape, bimag)
+        )
         avol_e = np.mean(avol[elem_0], axis=1) if hasattr(avol, "__len__") else avol
 
         for k, (i, j) in enumerate(pairs):
             rows_list.append(elem_0[:, i])
             cols_list.append(elem_0[:, j])
-            val = deldotdel_mat[:, offdiag_idx[k]] * avol_e + (breal_e @ w1[:, k]) * evol
+            val = (
+                deldotdel_mat[:, offdiag_idx[k]] * avol_e + (breal_e @ w1[:, k]) * evol
+            )
             if is_complex:
                 val = val.astype(complex) + 1j * (bimag_e @ w1[:, k]) * evol
             vals_list.append(val)
@@ -261,11 +271,12 @@ def femlhs(
     # Boundary condition: Robin (DOT) or first-order Bayliss-Turkel (MWT)
     if ishelmholtz:
         from .property import getbulk
+
         bk = getbulk(cfg)
         if isinstance(bk, dict):
             bk = bk[wavelength] if wavelength in bk else list(bk.values())[0]
         EPS0_MM = 8.854187817e-15
-        k2bg = (omega ** 2) * bk[2] * EPS0_MM * bk[0] - 1j * omega * bk[2] * bk[1]
+        k2bg = (omega**2) * bk[2] * EPS0_MM * bk[0] - 1j * omega * bk[2] * bk[1]
         kbg = np.sqrt(k2bg)
         rvec = cfg["facecenter"] - cfg["rbcorigin"][np.newaxis, :]
         rdotn = np.sum(rvec * cfg["facenormal"], axis=1) / cfg["facer"]
@@ -348,7 +359,9 @@ def femrhs(
     is_complex_rhs = (widesrc is not None and np.iscomplexobj(widesrc)) or (
         widedet is not None and np.iscomplexobj(widedet)
     )
-    rhs = sparse.lil_matrix((nn, total_cols), dtype=complex if is_complex_rhs else float)
+    rhs = sparse.lil_matrix(
+        (nn, total_cols), dtype=complex if is_complex_rhs else float
+    )
 
     # Initialize loc and bary for ALL optodes (including wide-field as NaN)
     total_optodes = srcnum + wfsrcnum + detnum + wfdetnum
@@ -640,7 +653,9 @@ def jacchrome(Jmua: dict, chromophores: List[str]) -> dict:
     return Jchrome
 
 
-def jacepssigma(Jmua: dict, omegas, has_eps: bool = True, has_sigma: bool = True) -> dict:
+def jacepssigma(
+    Jmua: dict, omegas, has_eps: bool = True, has_sigma: bool = True
+) -> dict:
     """
     Build Jacobian matrices for MWT permittivity (eps_r) and conductivity (sigma)
     from the absorption-Jacobian kernel.
@@ -683,7 +698,7 @@ def jacepssigma(Jmua: dict, omegas, has_eps: bool = True, has_sigma: bool = True
             omega = omegas[wv]
         else:
             omega = omegas
-        we = -(omega ** 2) * MU0_MM * EPS0_MM
+        we = -(omega**2) * MU0_MM * EPS0_MM
         ws = 1j * omega * MU0_MM
         if has_eps:
             block_e = Jmua[wv] * we

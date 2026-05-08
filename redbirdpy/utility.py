@@ -188,8 +188,7 @@ def meshprep(cfg: dict) -> Tuple[dict, np.ndarray]:
     if "srcpos" not in cfg:
         raise ValueError("cfg.srcpos is required")
     src_is_line = (
-        cfg.get("srcpos") is not None
-        and np.atleast_2d(cfg["srcpos"]).shape[1] >= 6
+        cfg.get("srcpos") is not None and np.atleast_2d(cfg["srcpos"]).shape[1] >= 6
     )
     if "srcdir" not in cfg and not src_is_line:
         raise ValueError("cfg.srcdir is required")
@@ -257,20 +256,16 @@ def meshprep(cfg: dict) -> Tuple[dict, np.ndarray]:
 
     # Detect 6-column line-segment srcpos / detpos
     src_is_line = (
-        cfg.get("srcpos") is not None
-        and np.atleast_2d(cfg["srcpos"]).shape[1] >= 6
+        cfg.get("srcpos") is not None and np.atleast_2d(cfg["srcpos"]).shape[1] >= 6
     )
     det_is_line = (
-        cfg.get("detpos") is not None
-        and np.atleast_2d(cfg["detpos"]).shape[1] >= 6
+        cfg.get("detpos") is not None and np.atleast_2d(cfg["detpos"]).shape[1] >= 6
     )
 
     # Process wide-field sources if present
     srctype = cfg.get("srctype", "pencil")
     if (
-        srctype not in ["pencil", "isotropic"]
-        or "widesrcid" in cfg
-        or src_is_line
+        srctype not in ["pencil", "isotropic"] or "widesrcid" in cfg or src_is_line
     ) and "widesrc" not in cfg:
         if not src_is_line:
             cfg["srcpos0"] = cfg["srcpos"].copy()
@@ -279,9 +274,7 @@ def meshprep(cfg: dict) -> Tuple[dict, np.ndarray]:
     # Process wide-field detectors if present
     dettype = cfg.get("dettype", "pencil")
     if (
-        dettype not in ["pencil", "isotropic"]
-        or "widedetid" in cfg
-        or det_is_line
+        dettype not in ["pencil", "isotropic"] or "widedetid" in cfg or det_is_line
     ) and "widedet" not in cfg:
         if not det_is_line:
             cfg["detpos0"] = cfg["detpos"].copy()

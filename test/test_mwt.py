@@ -59,7 +59,10 @@ class TestMWTBulkAndProp(unittest.TestCase):
             ),
             "elem": np.array([[1, 2, 3, 4], [1, 2, 3, 5], [1, 2, 4, 5]]),
             "seg": np.array([1, 1, 2]),
-            "param": {"epsilon": np.array([40.0, 60.0]), "sigma": np.array([0.5e-3, 1.0e-3])},
+            "param": {
+                "epsilon": np.array([40.0, 60.0]),
+                "sigma": np.array([0.5e-3, 1.0e-3]),
+            },
             "prop": {
                 "5e8": np.array(
                     [[1, 0, MU0_MM, 1], [1, 0, MU0_MM, 1], [1, 0, MU0_MM, 1]]
@@ -100,9 +103,7 @@ class TestMWTMeshprep(unittest.TestCase):
             "detpos": np.array([[30, 20, 40]]),
             "detdir": np.array([[0, 0, -1]]),
             "bulk": {"epsilon": 1.0, "sigma": 0.0, "n": 1.0},
-            "prop": {
-                "5e8": np.array([[1, 0, MU0_MM, 1], [1, 0, MU0_MM, 1]])
-            },
+            "prop": {"5e8": np.array([[1, 0, MU0_MM, 1], [1, 0, MU0_MM, 1]])},
             "omega": 2 * np.pi * 5e8,
         }
         return cfg
@@ -157,9 +158,7 @@ class TestMWTLineSource(unittest.TestCase):
             "srcpos": np.array([[20, 20, 0, 20, 20, 40]]),
             "detpos": np.array([[10, 10, 0, 10, 10, 40]]),
             "bulk": {"epsilon": 1.0, "sigma": 0.0, "n": 1.0},
-            "prop": {
-                "5e8": np.array([[1, 0, MU0_MM, 1], [1, 0, MU0_MM, 1]])
-            },
+            "prop": {"5e8": np.array([[1, 0, MU0_MM, 1], [1, 0, MU0_MM, 1]])},
             "omega": 2 * np.pi * 5e8,
         }
 
@@ -257,20 +256,20 @@ class TestMWTKFormula(unittest.TestCase):
     def test_k_vacuum_equals_omega_over_c(self):
         omega = 2 * np.pi * 5e8
         c0_mm_per_s = 1.0 / np.sqrt(MU0_MM * EPS0_MM)
-        k_vac = np.sqrt(omega ** 2 * MU0_MM * EPS0_MM)
+        k_vac = np.sqrt(omega**2 * MU0_MM * EPS0_MM)
         assert_allclose(k_vac, omega / c0_mm_per_s, rtol=1e-12)
 
     def test_k_lossy_im_negative(self):
         # for sigma>0, principal sqrt of (a - jb) has Im < 0 (decay)
         omega = 2 * np.pi * 5e8
-        k = np.sqrt(omega ** 2 * MU0_MM * EPS0_MM - 1j * omega * MU0_MM * 1e-3)
+        k = np.sqrt(omega**2 * MU0_MM * EPS0_MM - 1j * omega * MU0_MM * 1e-3)
         self.assertLess(k.imag, 0)
 
     def test_k_scales_with_omega_in_lossless(self):
         omega_lo = 2 * np.pi * 5e8
         omega_hi = 2 * np.pi * 5e9
-        k_lo = np.sqrt(omega_lo ** 2 * MU0_MM * EPS0_MM)
-        k_hi = np.sqrt(omega_hi ** 2 * MU0_MM * EPS0_MM)
+        k_lo = np.sqrt(omega_lo**2 * MU0_MM * EPS0_MM)
+        k_hi = np.sqrt(omega_hi**2 * MU0_MM * EPS0_MM)
         assert_allclose(k_hi.real / k_lo.real, 10.0, rtol=1e-9)
 
 
@@ -292,16 +291,10 @@ class TestMWTReciprocity(unittest.TestCase):
             "face": self.face,
             "elem": self.elem,
             "seg": np.ones(self.elem.shape[0], dtype=int),
-            "srcpos": np.array(
-                [[10, 20, 5, 10, 20, 35], [30, 20, 5, 30, 20, 35]]
-            ),
-            "detpos": np.array(
-                [[10, 20, 5, 10, 20, 35], [30, 20, 5, 30, 20, 35]]
-            ),
+            "srcpos": np.array([[10, 20, 5, 10, 20, 35], [30, 20, 5, 30, 20, 35]]),
+            "detpos": np.array([[10, 20, 5, 10, 20, 35], [30, 20, 5, 30, 20, 35]]),
             "bulk": {"epsilon": 4.0, "sigma": 1e-4, "n": 2.0},
-            "prop": {
-                "5e8": np.array([[1, 0, MU0_MM, 1], [4, 1e-4, MU0_MM, 2]])
-            },
+            "prop": {"5e8": np.array([[1, 0, MU0_MM, 1], [4, 1e-4, MU0_MM, 2]])},
             "omega": 2 * np.pi * 5e8,
         }
         cfg, _ = utility.meshprep(cfg)
@@ -323,7 +316,7 @@ class TestMWTJacobianChain(unittest.TestCase):
         chain = forward.jacepssigma(Jmua, omega, has_eps=True, has_sigma=False)
         self.assertIn("epsilon", chain)
         self.assertNotIn("sigma", chain)
-        expected = -(omega ** 2) * MU0_MM * EPS0_MM * np.ones((4, 10))
+        expected = -(omega**2) * MU0_MM * EPS0_MM * np.ones((4, 10))
         assert_allclose(chain["epsilon"], expected)
 
     def test_chain_sigma_only(self):
