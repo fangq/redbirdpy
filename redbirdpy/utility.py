@@ -187,40 +187,104 @@ def meshprep(cfg: dict) -> Tuple[dict, np.ndarray]:
     # Validate sources and detectors
     if "srcpos" not in cfg:
         raise ValueError("cfg.srcpos is required")
-    if "srcdir" not in cfg:
+    src_is_line = (
+        cfg.get("srcpos") is not None
+        and np.atleast_2d(cfg["srcpos"]).shape[1] >= 6
+    )
+    if "srcdir" not in cfg and not src_is_line:
         raise ValueError("cfg.srcdir is required")
 
     # Update properties if multi-spectral
     if isinstance(cfg.get("prop"), dict) and "param" in cfg:
         cfg["prop"] = updateprop(cfg)
 
-    # Compute effective reflection coefficient
-    if "reff" not in cfg or cfg["reff"] is None:
-        bkprop = getbulk(cfg)
-        if isinstance(bkprop, dict):
-            cfg["reff"] = {}
-            cfg["musp0"] = {}
-            for wv, prop in bkprop.items():
-                cfg["reff"][wv] = getreff(prop[3], 1.0)
-                cfg["musp0"][wv] = prop[1] * (1 - prop[2])
-        else:
-            cfg["reff"] = getreff(bkprop[3], 1.0)
-            cfg["musp0"] = bkprop[1] * (1 - bkprop[2])
+    # MWT (Helmholtz) detection: cfg.bulk.epsilon or cfg.bulk.sigma
+    ishelmholtz = isinstance(cfg.get("bulk"), dict) and (
+        "epsilon" in cfg["bulk"] or "sigma" in cfg["bulk"]
+    )
+
+    # face-adjacency table (4 face-neighbors per tet, 0 = boundary face).
+    # used by line-source tracing for both DOT and MWT.
+    if HAS_ISO2MESH and ("facenb" not in cfg or cfg.get("facenb") is None):
+        cfg["facenb"] = i2m.faceneighbors(cfg["elem"][:, :4])
+
+    if not ishelmholtz:
+        # compute R_eff - effective reflection coeff, and musp0 - background mus'
+        if "reff" not in cfg or cfg["reff"] is None:
+            bkprop = getbulk(cfg)
+            if isinstance(bkprop, dict):
+                cfg["reff"] = {}
+                cfg["musp0"] = {}
+                for wv, prop in bkprop.items():
+                    cfg["reff"][wv] = getreff(prop[3], 1.0)
+                    cfg["musp0"][wv] = prop[1] * (1 - prop[2])
+            else:
+                cfg["reff"] = getreff(bkprop[3], 1.0)
+                cfg["musp0"] = bkprop[1] * (1 - bkprop[2])
+    else:
+        # MWT: precompute Bayliss-Turkel RBC geometry on cfg.face
+        face_0 = cfg["face"][:, :3].astype(int) - 1  # 1-based -> 0-based
+        node3 = cfg["node"][:, :3]
+        if "facecenter" not in cfg or cfg.get("facecenter") is None:
+            cfg["facecenter"] = (
+                node3[face_0[:, 0], :] + node3[face_0[:, 1], :] + node3[face_0[:, 2], :]
+            ) / 3.0
+        if "facenormal" not in cfg or cfg.get("facenormal") is None:
+            ab = node3[face_0[:, 1], :] - node3[face_0[:, 0], :]
+            ac = node3[face_0[:, 2], :] - node3[face_0[:, 0], :]
+            nrm = np.cross(ab, ac)
+            nlen = np.sqrt(np.sum(nrm * nrm, axis=1, keepdims=True))
+            cfg["facenormal"] = nrm / np.maximum(nlen, 1e-30)
+        if "rbcorigin" not in cfg or cfg.get("rbcorigin") is None:
+            optodes = []
+            if "srcpos" in cfg and cfg["srcpos"] is not None:
+                sp = np.atleast_2d(cfg["srcpos"])
+                optodes.append(sp[:, :3])
+                if sp.shape[1] >= 6:
+                    optodes.append(sp[:, 3:6])
+            if "detpos" in cfg and cfg["detpos"] is not None:
+                dp = np.atleast_2d(cfg["detpos"])
+                optodes.append(dp[:, :3])
+                if dp.shape[1] >= 6:
+                    optodes.append(dp[:, 3:6])
+            if optodes:
+                cfg["rbcorigin"] = np.vstack(optodes).mean(axis=0)
+            else:
+                cfg["rbcorigin"] = node3.mean(axis=0)
+        if "facer" not in cfg or cfg.get("facer") is None:
+            rvec = cfg["facecenter"] - cfg["rbcorigin"][np.newaxis, :]
+            cfg["facer"] = np.sqrt(np.sum(rvec * rvec, axis=1))
+
+    # Detect 6-column line-segment srcpos / detpos
+    src_is_line = (
+        cfg.get("srcpos") is not None
+        and np.atleast_2d(cfg["srcpos"]).shape[1] >= 6
+    )
+    det_is_line = (
+        cfg.get("detpos") is not None
+        and np.atleast_2d(cfg["detpos"]).shape[1] >= 6
+    )
 
     # Process wide-field sources if present
     srctype = cfg.get("srctype", "pencil")
     if (
-        srctype not in ["pencil", "isotropic"] or "widesrcid" in cfg
+        srctype not in ["pencil", "isotropic"]
+        or "widesrcid" in cfg
+        or src_is_line
     ) and "widesrc" not in cfg:
-        cfg["srcpos0"] = cfg["srcpos"].copy()
+        if not src_is_line:
+            cfg["srcpos0"] = cfg["srcpos"].copy()
         cfg = src2bc(cfg, isdet=False)
 
     # Process wide-field detectors if present
     dettype = cfg.get("dettype", "pencil")
     if (
-        dettype not in ["pencil", "isotropic"] or "widedetid" in cfg
+        dettype not in ["pencil", "isotropic"]
+        or "widedetid" in cfg
+        or det_is_line
     ) and "widedet" not in cfg:
-        cfg["detpos0"] = cfg["detpos"].copy()
+        if not det_is_line:
+            cfg["detpos0"] = cfg["detpos"].copy()
         cfg = src2bc(cfg, isdet=True)
 
     # Compute sparse matrix structure
@@ -256,6 +320,12 @@ def src2bc(cfg: dict, isdet: bool = False) -> dict:
     This function computes the inward flux on mesh surface triangles for
     wide-field illumination patterns (planar, pattern, fourier sources).
 
+    Also supports 6-column cfg.srcpos / cfg.detpos for line-segment sources
+    (used by both DOT and MWT): columns 1-3 are the start point, columns
+    4-6 are the end point. The line is traced through the tet mesh and
+    contributes a sparse RHS column built from per-tet line integrals of
+    the linear basis functions.
+
     Parameters
     ----------
     cfg : dict
@@ -270,6 +340,20 @@ def src2bc(cfg: dict, isdet: bool = False) -> dict:
     """
     if not HAS_ISO2MESH:
         raise ImportError("iso2mesh is required for wide-field source processing")
+
+    # Line-source/detector path: 6-column position array means line endpoints
+    if not isdet:
+        pos_key, out_key, posbk_key = "srcpos", "widesrc", "srcpos0"
+    else:
+        pos_key, out_key, posbk_key = "detpos", "widedet", "detpos0"
+
+    if pos_key in cfg and cfg[pos_key] is not None:
+        positions = np.atleast_2d(cfg[pos_key])
+        if positions.shape[1] >= 6:
+            cfg[posbk_key] = positions
+            cfg[out_key] = _lineseg2rhs(positions, cfg)
+            cfg[pos_key] = np.zeros((0, 3))
+            return cfg
 
     # Determine field names based on source vs detector
     if not isdet:
@@ -634,6 +718,128 @@ def _apply_bc_weighting(
             rhs[:, i] = rhs[:, i] * (wsrc / norm)
 
     return rhs.T  # Return (Npattern, Nn)
+
+
+def _lineseg2rhs(linesegs: np.ndarray, cfg: dict) -> np.ndarray:
+    """
+    Build per-source RHS rows by tracing each line segment through the tet mesh.
+
+    Each row is the per-node line integral of the linear basis along the
+    segment. For Helmholtz (MWT), scales by -j*omega*mu0 to account for the
+    -j*omega*mu*J source term in the wave equation.
+
+    Returns an (Ns x Nn) ndarray (one row per line segment, complex if MWT).
+    """
+    if not HAS_ISO2MESH:
+        raise ImportError("iso2mesh is required for line-source tracing")
+
+    ns = linesegs.shape[0]
+    nn = cfg["node"].shape[0]
+    ishelmholtz = isinstance(cfg.get("bulk"), dict) and (
+        "epsilon" in cfg["bulk"] or "sigma" in cfg["bulk"]
+    )
+    dtype = complex if ishelmholtz else float
+
+    widesrc = np.zeros((ns, nn), dtype=dtype)
+    for s in range(ns):
+        widesrc[s, :] = _traceline(linesegs[s, :3], linesegs[s, 3:6], cfg)
+
+    if "srcweight" in cfg and np.atleast_1d(cfg["srcweight"]).size == ns:
+        widesrc = widesrc * np.atleast_1d(cfg["srcweight"]).reshape(-1, 1)
+
+    if ishelmholtz:
+        if isinstance(cfg.get("omega"), dict):
+            omega = list(cfg["omega"].values())[0]
+        else:
+            omega = cfg.get("omega", 0)
+        mu0_mm = 4.0 * np.pi * 1e-10
+        widesrc = -1j * omega * mu0_mm * widesrc
+
+    return widesrc.T  # store as (Nn x Ns) per redbirdpy convention
+
+
+def _traceline(p1: np.ndarray, p2: np.ndarray, cfg: dict) -> np.ndarray:
+    """
+    Trace a single line segment through the tet mesh and accumulate
+    (bary_in + bary_out)/2 * dl per tet onto a per-node line integral.
+    """
+    nn = cfg["node"].shape[0]
+    rowvec = np.zeros(nn, dtype=float)
+
+    p1 = np.asarray(p1, dtype=float).flatten()
+    p2 = np.asarray(p2, dtype=float).flatten()
+    seglen = np.linalg.norm(p2 - p1)
+    if seglen < 1e-12:
+        return rowvec
+    dirvec = (p2 - p1) / seglen
+
+    # find starting tet via tsearchn (1-based loc)
+    elem = cfg["elem"][:, :4].astype(int)
+    estart, barystart = i2m.tsearchn(cfg["node"][:, :3], elem, p1.reshape(1, 3))
+    if np.isnan(estart[0]):
+        return rowvec
+
+    facenb = cfg["facenb"]  # (Ne x 4), 0 = boundary
+    face_local = np.array([[1, 2, 3], [1, 2, 4], [1, 3, 4], [2, 3, 4]])  # 1-based local
+
+    e = int(estart[0])  # 1-based
+    pcur = p1.copy()
+    barycur = np.atleast_2d(barystart)[0].copy()
+    lrem = seglen
+
+    max_iter = 100 * elem.shape[0]
+    for _ in range(max_iter):
+        if lrem <= 1e-12 or e <= 0:
+            break
+        elemnodes = elem[e - 1, :4]  # 1-based global node indices
+        face_global = elemnodes[face_local - 1]  # (4 x 3) of 1-based node ids
+
+        tt, uu, vv, _ = i2m.raytrace(pcur, dirvec, cfg["node"][:, :3], face_global)
+        finite = np.isfinite(tt)
+        valid = (
+            finite
+            & (tt > 1e-10)
+            & (uu >= -1e-10)
+            & (vv >= -1e-10)
+            & (uu + vv <= 1.0 + 1e-10)
+        )
+        if not np.any(valid):
+            break
+
+        valid_idx = np.where(valid)[0]
+        kmin = valid_idx[np.argmin(tt[valid_idx])]
+        tmin = tt[kmin]
+
+        if tmin >= lrem - 1e-12:
+            # segment ends inside this tet
+            pend = pcur + lrem * dirvec
+            verts = cfg["node"][elemnodes - 1, :3].T  # (3 x 4)
+            mat = np.vstack([verts, np.ones((1, 4))])  # (4 x 4)
+            rhs_solve = np.append(pend, 1.0)
+            baryend = np.linalg.solve(mat, rhs_solve)
+            contrib = 0.5 * (barycur + baryend) * lrem
+            rowvec[elemnodes - 1] += contrib
+            break
+
+        # exit through face kmin
+        u_e = uu[kmin]
+        v_e = vv[kmin]
+        fnodes_local = face_local[kmin, :] - 1  # 0..3 within the tet
+        baryexit = np.zeros(4, dtype=float)
+        baryexit[fnodes_local[0]] = 1.0 - u_e - v_e
+        baryexit[fnodes_local[1]] = u_e
+        baryexit[fnodes_local[2]] = v_e
+
+        contrib = 0.5 * (barycur + baryexit) * tmin
+        rowvec[elemnodes - 1] += contrib
+
+        e_next = int(facenb[e - 1, kmin])
+        pcur = pcur + tmin * dirvec
+        barycur = baryexit
+        lrem = lrem - tmin
+        e = e_next
+
+    return rowvec
 
 
 def _inpolygon(

@@ -31,7 +31,7 @@ from scipy.sparse.linalg import spsolve
 from typing import Dict, Tuple, Optional, Union, List, Any
 import warnings
 
-from .forward import runforward, jac, jacchrome
+from .forward import runforward, jac, jacchrome, jacepssigma
 from .solver import femsolve
 from .utility import sdmap, meshinterp
 from .property import updateprop
@@ -170,15 +170,23 @@ def runrecon(
             key = "mua" if wv == "" else wv
             Jmua[key] = Jmua_n
 
-        # Build chromophore Jacobians if multi-spectral
+        # Build chromophore Jacobians if multi-spectral, OR MWT Jacobians
+        # (epsilon/sigma) if cfg.param has those entries.
         if isinstance(cfg.get("prop"), dict) and "param" in cfg:
-            chromophores = [
-                k
-                for k in cfg["param"].keys()
-                if k in ["hbo", "hbr", "water", "lipids", "aa3"]
-            ]
-            if chromophores:
-                Jmua = jacchrome(Jmua, chromophores)
+            has_eps = "epsilon" in cfg["param"]
+            has_sigma = "sigma" in cfg["param"]
+            if has_eps or has_sigma:
+                Jmua = jacepssigma(
+                    Jmua, cfg.get("omega", 0), has_eps=has_eps, has_sigma=has_sigma
+                )
+            else:
+                chromophores = [
+                    k
+                    for k in cfg["param"].keys()
+                    if k in ["hbo", "hbr", "water", "lipids", "aa3"]
+                ]
+                if chromophores:
+                    Jmua = jacchrome(Jmua, chromophores)
 
         # Flatten measurement data
         detphi0_flat = _flatten_detphi(detphi0, sd, wavelengths, rfcw)

@@ -125,7 +125,33 @@ def updateprop(cfg: dict, wv: str = None) -> Union[np.ndarray, dict]:
 
     prop_out = {}
 
+    # MWT detection: epsilon/sigma in cfg.param -> Helmholtz, columns
+    # become [eps_r, sigma, mu0, n] instead of [mua, musp, g, n].
+    ishelmholtz = ("epsilon" in params) or ("sigma" in params)
+
     for wavelen in wavelengths:
+        if ishelmholtz:
+            segprop = cfg["prop"][wavelen]
+            if "epsilon" in params:
+                eps_r = np.atleast_1d(params["epsilon"]).astype(float)
+            else:
+                eps_r = np.ones_like(np.atleast_1d(params["sigma"]).astype(float))
+            if "sigma" in params:
+                sigma = np.atleast_1d(params["sigma"]).astype(float)
+            else:
+                sigma = np.zeros_like(eps_r)
+            nn = cfg["node"].shape[0] if "node" in cfg else len(eps_r)
+            ne = cfg["elem"].shape[0] if "elem" in cfg else len(eps_r)
+            if len(eps_r) < min(nn, ne):  # label-based
+                new_prop = segprop.copy()
+                new_prop[1 : len(eps_r) + 1, 0] = eps_r
+                new_prop[1 : len(sigma) + 1, 1] = sigma
+            else:
+                mu0col = np.full_like(eps_r, segprop[1, 2])
+                ncol = np.full_like(eps_r, segprop[1, 3])
+                new_prop = np.column_stack([eps_r, sigma, mu0col, ncol])
+            prop_out[wavelen] = new_prop
+            continue
         # Default tissue composition values
         if "water" not in params:
             params["water"] = 0.23
@@ -218,7 +244,10 @@ def getbulk(cfg: dict) -> Union[np.ndarray, dict]:
     Get bulk/background optical properties.
 
     Returns the optical properties of the outer-most layer that interfaces
-    with air (used for boundary condition calculation).
+    with air (used for boundary condition calculation). For DOT, returns
+    [mua, mus, g, n] (1/mm, 1/mm, scalar, scalar). For MWT, returns
+    [eps_r, sigma, mu0, n] (scalar, S/mm, H/mm, scalar). MWT mode is
+    triggered by cfg.bulk.epsilon or cfg.bulk.sigma.
 
     Parameters
     ----------
@@ -229,7 +258,8 @@ def getbulk(cfg: dict) -> Union[np.ndarray, dict]:
     Returns
     -------
     bkprop : ndarray or dict
-        [mua, mus, g, n] for the bulk medium
+        [mua, mus, g, n] for the bulk medium (DOT) or
+        [eps_r, sigma, mu0, n] for MWT.
         Dict keyed by wavelength if multi-wavelength
 
     Notes
@@ -241,7 +271,13 @@ def getbulk(cfg: dict) -> Union[np.ndarray, dict]:
     # If explicit bulk properties provided, use those
     if "bulk" in cfg:
         bulk = cfg["bulk"]
-        bkprop = bkprop_default.copy()
+        # MWT detection: epsilon or sigma in bulk -> Helmholtz formulation
+        ishelmholtz = ("epsilon" in bulk) or ("sigma" in bulk)
+        if ishelmholtz:
+            # default vacuum-like: eps_r=1, sigma=0, mu0=4*pi*1e-10 H/mm, n=1
+            bkprop = np.array([1.0, 0.0, 4 * np.pi * 1e-10, 1.0])
+        else:
+            bkprop = bkprop_default.copy()
         if "mua" in bulk:
             bkprop[0] = bulk["mua"]
         if "dcoeff" in bulk:
@@ -253,6 +289,12 @@ def getbulk(cfg: dict) -> Union[np.ndarray, dict]:
             bkprop[2] = 0
         if "g" in bulk:
             bkprop[2] = bulk["g"]
+        if "epsilon" in bulk:
+            bkprop[0] = bulk["epsilon"]
+        if "sigma" in bulk:
+            bkprop[1] = bulk["sigma"]
+        if "mu0" in bulk:
+            bkprop[2] = bulk["mu0"]
         if "n" in bulk:
             bkprop[3] = bulk["n"]
         return bkprop

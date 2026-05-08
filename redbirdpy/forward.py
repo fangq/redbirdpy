@@ -20,6 +20,7 @@ __all__ = [
     "femgetdet",
     "jac",
     "jacchrome",
+    "jacepssigma",
     "C0",
 ]
 
@@ -91,7 +92,18 @@ def femlhs(
     cfg: dict, deldotdel_mat: np.ndarray, wavelength: str = "", mode: int = 1
 ) -> sparse.csr_matrix:
     """
-    Create FEM stiffness matrix - optimized assembly with original algorithm.
+    Create FEM stiffness matrix.
+
+    Builds the FEM left-hand-side (system matrix) for either
+    DOT (diffusion equation) or MWT (scalar Helmholtz equation).
+    MWT mode is engaged when cfg.bulk.epsilon or cfg.bulk.sigma is
+    present (defining the bulk medium for the first-order
+    Bayliss-Turkel radiation boundary condition).
+
+    For both PDEs, the per-element volume integral has the form
+        A_e = avol * <grad phi_i, grad phi_j>_e + (breal + 1j*bimag) * <phi_i, phi_j>_e
+    DOT: avol = D, breal = mua, bimag = omega/c * n
+    MWT: avol = 1, breal = -omega^2 * mu * eps0 * eps_r, bimag = +omega * mu * sigma
     """
     nn = cfg["node"].shape[0]
     ne = cfg["elem"].shape[0]
@@ -102,47 +114,79 @@ def femlhs(
     elem_0 = cfg["elem"][:, :4].astype(np.int32) - 1
     face_0 = cfg["face"].astype(np.int32) - 1
 
+    # MWT detection: cfg.bulk.epsilon or cfg.bulk.sigma defines the bulk medium
+    # for the radiation boundary condition.
+    ishelmholtz = isinstance(cfg.get("bulk"), dict) and (
+        "epsilon" in cfg["bulk"] or "sigma" in cfg["bulk"]
+    )
+
     # Get properties for current wavelength
     if isinstance(cfg.get("prop"), dict) and wavelength:
         props = cfg["prop"][wavelength]
-        reff = (
-            cfg["reff"][wavelength]
-            if isinstance(cfg.get("reff"), dict)
-            else cfg["reff"]
-        )
         omega = (
             cfg["omega"].get(wavelength, 0)
             if isinstance(cfg.get("omega"), dict)
             else cfg.get("omega", 0)
         )
+        if not ishelmholtz:
+            reff = (
+                cfg["reff"][wavelength]
+                if isinstance(cfg.get("reff"), dict)
+                else cfg["reff"]
+            )
     else:
         props = cfg["prop"]
-        reff = cfg.get("reff", 0.493)
         omega = cfg.get("omega", 0)
+        if not ishelmholtz:
+            reff = cfg.get("reff", 0.493)
 
     if mode == 2:
         omega = 0
 
-    # Extract mua and musp (original logic preserved)
     seg = cfg.get("seg", None)
-    if props.shape[0] == nn or props.shape[0] == ne:
-        mua = props[:, 0]
-        musp = props[:, 1] * (1 - props[:, 2]) if props.shape[1] >= 3 else props[:, 1]
-        nref = props[:, 3] if props.shape[1] >= 4 else 1.37
-    elif seg is not None:
-        seg_idx = np.clip(seg.astype(np.int32), 0, props.shape[0] - 1)
-        mua = props[seg_idx, 0]
-        musp = (
-            props[seg_idx, 1] * (1 - props[seg_idx, 2])
-            if props.shape[1] >= 3
-            else props[seg_idx, 1]
-        )
-        nref = props[seg_idx[0], 3] if props.shape[1] >= 4 else 1.37
-    else:
-        raise ValueError("Property format not recognized")
 
-    dcoeff = 1.0 / (3.0 * (mua + musp))
-    Reff = reff
+    # Extract material properties and compute (avol, breal, bimag) per node or per elem
+    if ishelmholtz:
+        EPS0_MM = 8.854187817e-15  # F/mm
+        if props.shape[0] == nn or props.shape[0] == ne:
+            eps_r = props[:, 0]
+            sigma = props[:, 1]
+            permea = props[:, 2] if props.shape[1] >= 3 else 4 * np.pi * 1e-10
+            if np.isscalar(permea):
+                permea = np.full_like(eps_r, permea)
+        elif seg is not None:
+            seg_idx = np.clip(seg.astype(np.int32), 0, props.shape[0] - 1)
+            eps_r = props[seg_idx, 0]
+            sigma = props[seg_idx, 1]
+            permea = props[seg_idx, 2] if props.shape[1] >= 3 else np.full_like(eps_r, 4 * np.pi * 1e-10)
+        else:
+            raise ValueError("Property format not recognized")
+        avol = np.ones_like(eps_r)
+        breal = -(omega ** 2) * permea * EPS0_MM * eps_r
+        bimag = omega * permea * sigma
+        is_complex = True
+    else:
+        if props.shape[0] == nn or props.shape[0] == ne:
+            mua = props[:, 0]
+            musp = props[:, 1] * (1 - props[:, 2]) if props.shape[1] >= 3 else props[:, 1]
+            nref = props[:, 3] if props.shape[1] >= 4 else 1.37
+        elif seg is not None:
+            seg_idx = np.clip(seg.astype(np.int32), 0, props.shape[0] - 1)
+            mua = props[seg_idx, 0]
+            musp = (
+                props[seg_idx, 1] * (1 - props[seg_idx, 2])
+                if props.shape[1] >= 3
+                else props[seg_idx, 1]
+            )
+            nref = props[seg_idx[0], 3] if props.shape[1] >= 4 else 1.37
+        else:
+            raise ValueError("Property format not recognized")
+        if np.isscalar(nref):
+            nref = np.full_like(mua, nref)
+        avol = 1.0 / (3.0 * (mua + musp))
+        breal = mua
+        bimag = omega * R_C0 * nref
+        is_complex = omega > 0
 
     # Pre-allocate lists (faster than repeated extend)
     rows_list = []
@@ -152,14 +196,15 @@ def femlhs(
     offdiag_idx = [1, 2, 3, 5, 6, 8]
     pairs = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
-    # Element-based assembly (original algorithm)
-    if len(mua) == ne:
+    # Volume assembly: dispatches on per-element vs per-node properties.
+    # Coefficient (avol, breal, bimag) is what differs between DOT and MWT.
+    if len(breal) == ne:
         for k, (i, j) in enumerate(pairs):
             rows_list.append(elem_0[:, i])
             cols_list.append(elem_0[:, j])
-            val = deldotdel_mat[:, offdiag_idx[k]] * dcoeff + 0.05 * mua * evol
-            if omega > 0:
-                val = val.astype(complex) + 1j * 0.05 * omega * R_C0 * nref * evol
+            val = deldotdel_mat[:, offdiag_idx[k]] * avol + 0.05 * breal * evol
+            if is_complex:
+                val = val.astype(complex) + 1j * 0.05 * bimag * evol
             vals_list.append(val)
 
             rows_list.append(elem_0[:, j])
@@ -170,12 +215,12 @@ def femlhs(
         for k in range(4):
             rows_list.append(elem_0[:, k])
             cols_list.append(elem_0[:, k])
-            val = deldotdel_mat[:, diag_idx[k]] * dcoeff + 0.10 * mua * evol
-            if omega > 0:
-                val = val.astype(complex) + 1j * 0.10 * omega * R_C0 * nref * evol
+            val = deldotdel_mat[:, diag_idx[k]] * avol + 0.10 * breal * evol
+            if is_complex:
+                val = val.astype(complex) + 1j * 0.10 * bimag * evol
             vals_list.append(val)
     else:
-        # Node-based properties (original algorithm)
+        # Node-based properties: use consistent-mass weights w1 (off-diag) / w2 (diag)
         w1 = (1 / 120) * np.array(
             [
                 [2, 2, 1, 1],
@@ -188,24 +233,16 @@ def femlhs(
         ).T
         w2 = (1 / 60) * (np.diag([2, 2, 2, 2]) + 1)
 
-        mua_e = mua[elem_0]
-        dcoeff_e = np.mean(dcoeff[elem_0], axis=1)
-        nref_e = nref[elem_0] if hasattr(nref, "__len__") and len(nref) == nn else nref
+        breal_e = breal[elem_0]
+        bimag_e = bimag[elem_0] if hasattr(bimag, "__len__") else np.full(elem_0.shape, bimag)
+        avol_e = np.mean(avol[elem_0], axis=1) if hasattr(avol, "__len__") else avol
 
         for k, (i, j) in enumerate(pairs):
             rows_list.append(elem_0[:, i])
             cols_list.append(elem_0[:, j])
-            val = (
-                deldotdel_mat[:, offdiag_idx[k]] * dcoeff_e + (mua_e @ w1[:, k]) * evol
-            )
-            if omega > 0:
-                if hasattr(nref_e, "__len__"):
-                    val = (
-                        val.astype(complex)
-                        + 1j * omega * R_C0 * (nref_e @ w1[:, k]) * evol
-                    )
-                else:
-                    val = val.astype(complex) + 1j * omega * R_C0 * nref_e * 0.05 * evol
+            val = deldotdel_mat[:, offdiag_idx[k]] * avol_e + (breal_e @ w1[:, k]) * evol
+            if is_complex:
+                val = val.astype(complex) + 1j * (bimag_e @ w1[:, k]) * evol
             vals_list.append(val)
 
             rows_list.append(elem_0[:, j])
@@ -216,21 +253,31 @@ def femlhs(
         for k in range(4):
             rows_list.append(elem_0[:, k])
             cols_list.append(elem_0[:, k])
-            val = deldotdel_mat[:, diag_idx[k]] * dcoeff_e + (mua_e @ w2[:, k]) * evol
-            if omega > 0:
-                if hasattr(nref_e, "__len__"):
-                    val = (
-                        val.astype(complex)
-                        + 1j * omega * R_C0 * (nref_e @ w2[:, k]) * evol
-                    )
-                else:
-                    val = val.astype(complex) + 1j * omega * R_C0 * nref_e * 0.10 * evol
+            val = deldotdel_mat[:, diag_idx[k]] * avol_e + (breal_e @ w2[:, k]) * evol
+            if is_complex:
+                val = val.astype(complex) + 1j * (bimag_e @ w2[:, k]) * evol
             vals_list.append(val)
 
-    # Boundary condition (original algorithm)
-    bc_coeff = (1 - Reff) / (12.0 * (1 + Reff))
-    Adiagbc = area * bc_coeff
-    Aoffdbc = Adiagbc * 0.5
+    # Boundary condition: Robin (DOT) or first-order Bayliss-Turkel (MWT)
+    if ishelmholtz:
+        from .property import getbulk
+        bk = getbulk(cfg)
+        if isinstance(bk, dict):
+            bk = bk[wavelength] if wavelength in bk else list(bk.values())[0]
+        EPS0_MM = 8.854187817e-15
+        k2bg = (omega ** 2) * bk[2] * EPS0_MM * bk[0] - 1j * omega * bk[2] * bk[1]
+        kbg = np.sqrt(k2bg)
+        rvec = cfg["facecenter"] - cfg["rbcorigin"][np.newaxis, :]
+        rdotn = np.sum(rvec * cfg["facenormal"], axis=1) / cfg["facer"]
+        bccoef = (1j * kbg - 1.0 / (2.0 * cfg["facer"])) * rdotn
+        Adiagbc = (area / 6.0) * bccoef
+        Aoffdbc = Adiagbc * 0.5
+        is_complex = True
+    else:
+        Reff = reff
+        bc_coeff = (1 - Reff) / (12.0 * (1 + Reff))
+        Adiagbc = area * bc_coeff
+        Aoffdbc = Adiagbc * 0.5
 
     for i, j in [(0, 1), (0, 2), (1, 2)]:
         rows_list.append(face_0[:, i])
@@ -250,7 +297,7 @@ def femlhs(
     cols = np.concatenate(cols_list)
     vals = np.concatenate(vals_list)
 
-    dtype = complex if omega > 0 else float
+    dtype = complex if is_complex else float
     Amat = sparse.coo_matrix((vals, (rows, cols)), shape=(nn, nn), dtype=dtype).tocsr()
 
     return Amat
@@ -297,7 +344,11 @@ def femrhs(
             np.array([]),
         )
 
-    rhs = sparse.lil_matrix((nn, total_cols))
+    # detect complex-valued widesrc/widedet (e.g. MWT line sources scaled by -j*omega*mu0)
+    is_complex_rhs = (widesrc is not None and np.iscomplexobj(widesrc)) or (
+        widedet is not None and np.iscomplexobj(widedet)
+    )
+    rhs = sparse.lil_matrix((nn, total_cols), dtype=complex if is_complex_rhs else float)
 
     # Initialize loc and bary for ALL optodes (including wide-field as NaN)
     total_optodes = srcnum + wfsrcnum + detnum + wfdetnum
@@ -587,3 +638,63 @@ def jacchrome(Jmua: dict, chromophores: List[str]) -> dict:
         Jchrome[ch] = Jch
 
     return Jchrome
+
+
+def jacepssigma(Jmua: dict, omegas, has_eps: bool = True, has_sigma: bool = True) -> dict:
+    """
+    Build Jacobian matrices for MWT permittivity (eps_r) and conductivity (sigma)
+    from the absorption-Jacobian kernel.
+
+    The DOT-style jac() returns Jmua = -<E_s, E_r>_M (per-element mass kernel).
+    For Helmholtz (A has -k^2*M), the chain rule gives:
+        Jk^2   = -Jmua_returned
+        J_eps  = (omega^2 * mu0 * eps0) * Jk^2 = -(omega^2 * mu0 * eps0) * Jmua
+        J_sig  = (-j * omega * mu0)     * Jk^2 = +(j * omega * mu0)     * Jmua
+
+    Per-frequency Jacobians are stacked vertically (one block per frequency).
+
+    Parameters
+    ----------
+    Jmua : dict
+        Per-frequency mua Jacobians (dict keyed by frequency string)
+    omegas : float or dict
+        Angular frequency (rad/s); dict keyed by the same frequency strings
+        as Jmua, or a scalar for single-frequency runs.
+    has_eps, has_sigma : bool
+        If True, include the corresponding parameter in the output.
+
+    Returns
+    -------
+    Jchain : dict
+        {'epsilon': Jeps, 'sigma': Jsigma} (only the requested keys).
+    """
+    if not isinstance(Jmua, dict):
+        raise ValueError("Jmua must be a dict with frequency keys")
+
+    EPS0_MM = 8.854187817e-15  # F/mm
+    MU0_MM = 4.0 * np.pi * 1e-10  # H/mm
+
+    wavelengths = list(Jmua.keys())
+    Jeps = None
+    Jsigma = None
+
+    for wv in wavelengths:
+        if isinstance(omegas, dict):
+            omega = omegas[wv]
+        else:
+            omega = omegas
+        we = -(omega ** 2) * MU0_MM * EPS0_MM
+        ws = 1j * omega * MU0_MM
+        if has_eps:
+            block_e = Jmua[wv] * we
+            Jeps = block_e if Jeps is None else np.vstack([Jeps, block_e])
+        if has_sigma:
+            block_s = Jmua[wv] * ws
+            Jsigma = block_s if Jsigma is None else np.vstack([Jsigma, block_s])
+
+    Jchain = {}
+    if has_eps:
+        Jchain["epsilon"] = Jeps
+    if has_sigma:
+        Jchain["sigma"] = Jsigma
+    return Jchain
