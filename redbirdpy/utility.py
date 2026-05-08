@@ -297,6 +297,36 @@ def meshprep(cfg: dict) -> Tuple[dict, np.ndarray]:
     if "omega" not in cfg:
         cfg["omega"] = 0
 
+    # Time-domain DOT (Crank-Nicolson) is engaged when cfg.tstart, cfg.tstep,
+    # and cfg.tend are all defined. Validate and reject mixed configurations.
+    istd = (
+        cfg.get("tstart") is not None
+        and cfg.get("tstep") is not None
+        and cfg.get("tend") is not None
+    )
+    if istd:
+        if cfg["tend"] <= cfg["tstart"]:
+            raise ValueError(
+                "cfg.tend must be greater than cfg.tstart for time-domain DOT"
+            )
+        if cfg["tstep"] <= 0:
+            raise ValueError("cfg.tstep must be positive for time-domain DOT")
+        omega_check = cfg.get("omega", 0)
+        if isinstance(omega_check, dict):
+            omega_vals = list(omega_check.values())
+        else:
+            omega_vals = [omega_check]
+        if any(np.asarray(v).any() for v in omega_vals):
+            raise ValueError(
+                "time-domain DOT (cfg.tstart/tstep/tend) cannot be used with "
+                "frequency-domain modulation (cfg.omega>0); pick one"
+            )
+        if ishelmholtz:
+            raise ValueError(
+                "time-domain Crank-Nicolson is only valid for the parabolic "
+                "diffusion equation; remove cfg.bulk.epsilon/sigma to use TD"
+            )
+
     # Create source-detector mapping
     sd = sdmap(cfg)
 

@@ -15,6 +15,7 @@ Functions:
 
 __all__ = [
     "runforward",
+    "runtd",
     "femlhs",
     "femrhs",
     "femgetdet",
@@ -41,7 +42,20 @@ R_C0 = 1.0 / C0
 def runforward(cfg: dict, **kwargs) -> Tuple[Any, Any]:
     """
     Perform forward simulations at all sources and all wavelengths.
+
+    Time-domain DOT (Crank-Nicolson) is engaged automatically when
+    cfg.tstart, cfg.tstep, and cfg.tend are all defined; the call is
+    delegated to `runtd` which returns 3D arrays (Nn x Nsrc x Nt for phi,
+    Ndet x Nsrc x Nt for detphi).
     """
+    # Time-domain dispatch (Crank-Nicolson)
+    if (
+        cfg.get("tstart") is not None
+        and cfg.get("tstep") is not None
+        and cfg.get("tend") is not None
+    ):
+        return runtd(cfg, **kwargs)
+
     solverflag = kwargs.get("solverflag", {})
     rfcw = kwargs.get("rfcw", [1])
     if isinstance(rfcw, int):
@@ -88,6 +102,205 @@ def runforward(cfg: dict, **kwargs) -> Tuple[Any, Any]:
     return detval_out, phi_out
 
 
+def runtd(cfg: dict, **kwargs) -> Tuple[Any, Any]:
+    """
+    Time-domain DOT forward solver using implicit Crank-Nicolson.
+
+    Solves the time-dependent diffusion equation
+        -div(D grad Phi) + mua * Phi + (1/c) dPhi/dt = S(r, t)
+    using the theta-method (default theta=0.5 = Crank-Nicolson). Engaged
+    automatically by `runforward` when cfg.tstart, cfg.tstep, and cfg.tend
+    are all defined.
+
+    Per-wavelength time-step operators (constant Delta_t -> single
+    factorization reused across all time steps and all sources):
+        A_TD = M / (c * dt) + theta * A_cw                  (LHS)
+        B_TD = M / (c * dt) - (1 - theta) * A_cw            (RHS update)
+    where A_cw is the CW spatial operator (femlhs mode=2) and M is the
+    consistent mass matrix (femlhs mode=3). The time-step recurrence is
+        Phi_{n+1} = A_TD^-1 ( B_TD * Phi_n + 0.5 * (b_n + b_{n+1}) )
+
+    Parameters
+    ----------
+    cfg : dict
+        Standard forward configuration plus the time-domain triplet
+        cfg.tstart, cfg.tstep, cfg.tend (all in seconds).
+    **kwargs : dict
+        theta : float, default 0.5
+            Theta-method weight (0.5 = Crank-Nicolson, 1.0 = backward Euler).
+        srctemporal : array or callable, optional
+            Temporal modulation of the source. Defaults to an impulse at
+            t = tstart (TPSF). If a vector of length Nt, gives s(t_n) per
+            step. If a callable f(t), evaluated at the time grid.
+        phi0 : ndarray, optional
+            Initial condition Nn x Nsrc. Defaults to zeros, except for
+            the impulse default which uses Phi(t_start) = c * M\\S_spatial.
+        tdsavevol : bool, default False
+            If True, also return the full volumetric phi (Nn x Nsrc x Nt).
+            Defaults to False to manage memory.
+
+    Returns
+    -------
+    detphi : ndarray or dict
+        Detector readings, Ndet x Nsrc x Nt (single-wavelength) or a dict
+        keyed by wavelength.
+    phi : ndarray or dict or None
+        Volumetric forward solution Nn x Nsrc x Nt when tdsavevol is True;
+        otherwise None.
+    """
+    from scipy.sparse.linalg import splu
+    from .property import getbulk
+
+    theta = kwargs.get("theta", 0.5)
+    tdsavevol = kwargs.get("tdsavevol", False)
+    phi0 = kwargs.get("phi0", None)
+    srctemporal = kwargs.get("srctemporal", None)
+
+    if cfg["tend"] <= cfg["tstart"] or cfg["tstep"] <= 0:
+        raise ValueError("require cfg.tend > cfg.tstart and cfg.tstep > 0")
+
+    # time grid (inclusive endpoint)
+    tvec = np.arange(cfg["tstart"], cfg["tend"] + 0.5 * cfg["tstep"], cfg["tstep"])
+    nt = len(tvec)
+
+    # bulk refractive index for the 1/c prefactor
+    bk = getbulk(cfg)
+    if isinstance(bk, dict):
+        bk = list(bk.values())[0]
+    nref_bulk = bk[3]
+    c_mm_per_s = C0 / nref_bulk
+
+    # wavelength keys
+    wavelengths = [""]
+    if isinstance(cfg.get("prop"), dict):
+        wavelengths = list(cfg["prop"].keys())
+
+    # source-detector mapping
+    sd = kwargs.get("sd")
+    if sd is None:
+        sd = sdmap(cfg)
+    if not isinstance(sd, dict):
+        sd = {wv: sd for wv in wavelengths}
+
+    if "deldotdel" not in cfg or cfg["deldotdel"] is None:
+        cfg["deldotdel"], _ = deldotdel(cfg)
+
+    nn = cfg["node"].shape[0]
+
+    # column counts per femrhs ordering: [point_src, wide_src, point_det, wide_det]
+    srcnum = 0
+    if cfg.get("srcpos") is not None:
+        sp = np.atleast_2d(cfg["srcpos"])
+        if sp.size > 0 and sp.shape[1] >= 3 and sp.shape[1] < 6:
+            srcnum = sp.shape[0]
+    wfsrcnum = 0
+    if cfg.get("widesrc") is not None and np.size(cfg["widesrc"]) > 0:
+        wfsrcnum = cfg["widesrc"].shape[1]
+    detnum = 0
+    if cfg.get("detpos") is not None:
+        dp = np.atleast_2d(cfg["detpos"])
+        if dp.size > 0 and dp.shape[1] >= 3 and dp.shape[1] < 6:
+            detnum = dp.shape[0]
+    wfdetnum = 0
+    if cfg.get("widedet") is not None and np.size(cfg["widedet"]) > 0:
+        wfdetnum = cfg["widedet"].shape[1]
+    total_src = srcnum + wfsrcnum
+    total_det = detnum + wfdetnum
+
+    # consistent mass matrix is wavelength-independent (geometry only),
+    # build it once outside the wavelength loop
+    M_mass = femlhs(cfg, cfg["deldotdel"], wavelengths[0] if wavelengths[0] else "", 3)
+
+    detphi_out = {}
+    phi_out = {}
+
+    for wv in wavelengths:
+        # CW spatial operator (omega = 0)
+        A_cw = femlhs(cfg, cfg["deldotdel"], wv, 2)
+
+        M_T = M_mass / (c_mm_per_s * cfg["tstep"])
+        A_TD = (M_T + theta * A_cw).tocsc()
+        B_TD = (M_T - (1 - theta) * A_cw).tocsr()
+
+        # factor A_TD once per wavelength (constant Delta_t -> constant LHS)
+        dA_TD = splu(A_TD)
+
+        # spatial source/detector vectors (Nn x (total_src + total_det))
+        rhs_spatial, _loc, _bary, _opt = femrhs(cfg, sd, wv, 1)
+        if sparse.issparse(rhs_spatial):
+            rhs_dense = np.asarray(rhs_spatial.toarray())
+        else:
+            rhs_dense = np.asarray(rhs_spatial)
+        S_spatial = rhs_dense[:, :total_src]
+        D_spatial = rhs_dense[:, total_src : total_src + total_det]
+
+        # temporal modulation
+        if srctemporal is None:
+            srct = np.zeros(nt, dtype=float)  # impulse handled via IC
+            is_impulse = True
+        elif callable(srctemporal):
+            srct = np.asarray(srctemporal(tvec)).flatten()
+            is_impulse = False
+        else:
+            srct = np.asarray(srctemporal).flatten()
+            if len(srct) != nt:
+                raise ValueError(
+                    f"cfg.srctemporal must have {nt} entries (one per time step)"
+                )
+            is_impulse = False
+
+        # initial condition: for impulse default, Phi(t_start) = c * M\S_spatial
+        # (the unique solution to the impulse-jump equation across the delta).
+        if phi0 is not None:
+            phi_prev = np.asarray(phi0, dtype=float).copy()
+            if phi_prev.shape != (nn, total_src):
+                raise ValueError(f"phi0 must have shape (Nn={nn}, Nsrc={total_src})")
+        elif is_impulse and total_src > 0:
+            from scipy.sparse.linalg import spsolve
+
+            phi_prev = c_mm_per_s * spsolve(M_mass.tocsc(), S_spatial)
+            if phi_prev.ndim == 1:
+                phi_prev = phi_prev[:, np.newaxis]
+        else:
+            phi_prev = np.zeros((nn, total_src), dtype=float)
+
+        # output allocation
+        detphi_t = np.zeros((total_det, total_src, nt), dtype=float)
+        phi_t = np.zeros((nn, total_src, nt), dtype=float) if tdsavevol else None
+        if tdsavevol:
+            phi_t[:, :, 0] = phi_prev
+        if total_det > 0 and total_src > 0:
+            detphi_t[:, :, 0] = D_spatial.T @ phi_prev
+
+        # time loop
+        for n in range(1, nt):
+            if is_impulse:
+                rhs_step = B_TD @ phi_prev
+            else:
+                rhs_step = B_TD @ phi_prev + 0.5 * (srct[n - 1] + srct[n]) * S_spatial
+            # multi-RHS solve via cached factorization
+            if total_src > 0:
+                phi_new = dA_TD.solve(rhs_step)
+            else:
+                phi_new = phi_prev
+            if tdsavevol:
+                phi_t[:, :, n] = phi_new
+            if total_det > 0 and total_src > 0:
+                detphi_t[:, :, n] = D_spatial.T @ phi_new
+            phi_prev = phi_new
+
+        detphi_out[wv] = detphi_t
+        if tdsavevol:
+            phi_out[wv] = phi_t
+
+    if len(wavelengths) == 1:
+        return (
+            detphi_out[wavelengths[0]],
+            phi_out.get(wavelengths[0]) if tdsavevol else None,
+        )
+    return detphi_out, (phi_out if tdsavevol else None)
+
+
 def femlhs(
     cfg: dict, deldotdel_mat: np.ndarray, wavelength: str = "", mode: int = 1
 ) -> sparse.csr_matrix:
@@ -104,6 +317,13 @@ def femlhs(
         A_e = avol * <grad phi_i, grad phi_j>_e + (breal + 1j*bimag) * <phi_i, phi_j>_e
     DOT: avol = D, breal = mua, bimag = omega/c * n
     MWT: avol = 1, breal = -omega^2 * mu * eps0 * eps_r, bimag = +omega * mu * sigma
+
+    The optional `mode` argument selects the operator returned:
+        mode = 1 (default) : full FD/CW LHS (uses cfg.omega)
+        mode = 2           : CW spatial operator (omega=0)
+        mode = 3           : pure consistent mass matrix M (no stiffness, no
+                             absorption, no BC; used by the time-domain
+                             Crank-Nicolson solver in runtd).
     """
     nn = cfg["node"].shape[0]
     ne = cfg["elem"].shape[0]
@@ -114,11 +334,50 @@ def femlhs(
     elem_0 = cfg["elem"][:, :4].astype(np.int32) - 1
     face_0 = cfg["face"].astype(np.int32) - 1
 
+    # pure mass-matrix mode: skip property extraction and BC; used by runtd.
+    ismassonly = mode == 3
+
     # MWT detection: cfg.bulk.epsilon or cfg.bulk.sigma defines the bulk medium
     # for the radiation boundary condition.
-    ishelmholtz = isinstance(cfg.get("bulk"), dict) and (
-        "epsilon" in cfg["bulk"] or "sigma" in cfg["bulk"]
+    ishelmholtz = (
+        not ismassonly
+        and isinstance(cfg.get("bulk"), dict)
+        and ("epsilon" in cfg["bulk"] or "sigma" in cfg["bulk"])
     )
+
+    if ismassonly:
+        # mass matrix only: avol=0, breal=1 (uniform), bimag=0; skip BC.
+        # Property extraction and reff lookup are skipped entirely.
+        avol = np.zeros(ne)
+        breal = np.ones(ne)
+        bimag = np.zeros(ne)
+        is_complex = False
+        # jump straight to the volume assembly
+        rows_list = []
+        cols_list = []
+        vals_list = []
+        offdiag_idx = [1, 2, 3, 5, 6, 8]
+        pairs = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+        for k, (i, j) in enumerate(pairs):
+            rows_list.append(elem_0[:, i])
+            cols_list.append(elem_0[:, j])
+            val = 0.05 * breal * evol  # avol*deldotdel = 0
+            vals_list.append(val)
+            rows_list.append(elem_0[:, j])
+            cols_list.append(elem_0[:, i])
+            vals_list.append(val)
+        diag_idx = [0, 4, 7, 9]
+        for k in range(4):
+            rows_list.append(elem_0[:, k])
+            cols_list.append(elem_0[:, k])
+            val = 0.10 * breal * evol
+            vals_list.append(val)
+        rows = np.concatenate(rows_list)
+        cols = np.concatenate(cols_list)
+        vals = np.concatenate(vals_list)
+        return sparse.coo_matrix(
+            (vals, (rows, cols)), shape=(nn, nn), dtype=float
+        ).tocsr()
 
     # Get properties for current wavelength
     if isinstance(cfg.get("prop"), dict) and wavelength:
