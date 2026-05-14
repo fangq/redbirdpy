@@ -98,16 +98,18 @@ def main():
     # Forward mesh + coarse recon mesh for the inversion
     # ----------------------------------------------------------------
     node_fwd, _, elem_fwd = i2m.meshabox([40, 0, 0], [160, 120, 60], 10)
-    cfg = rb.utility.meshprep({
-        "node": node_fwd,
-        "elem": elem_fwd,
-        "seg": np.ones(elem_fwd.shape[0], dtype=int),
-        "srcpos": cfg["srcpos"],
-        "srcdir": cfg["srcdir"],
-        "detpos": cfg["detpos"],
-        "prop": cfg["prop"],
-        "omega": cfg["omega"],
-    })[0]
+    cfg = rb.utility.meshprep(
+        {
+            "node": node_fwd,
+            "elem": elem_fwd,
+            "seg": np.ones(elem_fwd.shape[0], dtype=int),
+            "srcpos": cfg["srcpos"],
+            "srcdir": cfg["srcdir"],
+            "detpos": cfg["detpos"],
+            "prop": cfg["prop"],
+            "omega": cfg["omega"],
+        }
+    )[0]
 
     # MC path: route cfg.nphoton through to pmmc. detdir is auto-filled
     # from the surface mesh by getdetdir inside _runforward_mc when missing.
@@ -162,9 +164,7 @@ def main():
     nodes = newcfg["node"]
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    for ax, (axis, val, lab) in zip(
-        axes, [(2, 20.0, "z=20"), (0, 70.0, "x=70")]
-    ):
+    for ax, (axis, val, lab) in zip(axes, [(2, 20.0, "z=20"), (0, 70.0, "x=70")]):
         mask = np.abs(nodes[:, axis] - val) < 5
         if axis == 2:
             xs, ys, c = nodes[mask, 0], nodes[mask, 1], mua[mask]

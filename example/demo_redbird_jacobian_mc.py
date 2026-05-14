@@ -147,9 +147,7 @@ def main():
             plt.colorbar(sc, ax=ax)
 
     plt.tight_layout()
-    out_path = os.path.join(
-        os.path.dirname(__file__), "demo_redbird_jacobian_mc.png"
-    )
+    out_path = os.path.join(os.path.dirname(__file__), "demo_redbird_jacobian_mc.png")
     plt.savefig(out_path, dpi=100)
     print(f"\nBanana profile plot saved to: {out_path}")
 

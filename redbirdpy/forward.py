@@ -41,6 +41,7 @@ from .property import extinction
 # to the FEM solver with a warning when this isn't importable.
 try:
     import pmmc as _pmmc
+
     _HAS_PMMC = True
 except ImportError:
     _pmmc = None

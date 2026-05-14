@@ -155,8 +155,12 @@ def runrecon(
         # and skip the FEM jac() build when Jext is present. The FEM/TD
         # paths leave Jext = None and fall through to the rbjac equivalent.
         detphi, phi, Jext = runforward(
-            cfg, solverflag=solverflag, sd=sd, rfcw=rfcw,
-            return_jacobian=True, **kwargs,
+            cfg,
+            solverflag=solverflag,
+            sd=sd,
+            rfcw=rfcw,
+            return_jacobian=True,
+            **kwargs,
         )
 
         # Build Jacobians

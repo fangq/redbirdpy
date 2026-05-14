@@ -62,9 +62,7 @@ def main():
         "detpos": np.array(
             [[15, 30, 0], [25, 30, 0], [35, 30, 0], [45, 30, 0]], dtype=float
         ),
-        "detdir": np.array(
-            [[0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]], dtype=float
-        ),
+        "detdir": np.array([[0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]], dtype=float),
         "prop": np.array([[0, 0, 1, 1], [0.005, 1, 0, 1.37]], dtype=float),
         "omega": 0,  # CW
     }
@@ -160,9 +158,7 @@ def main():
             plt.colorbar(sc, ax=ax)
 
     plt.tight_layout()
-    out_path = os.path.join(
-        os.path.dirname(__file__), "demo_redbird_forward_mc.png"
-    )
+    out_path = os.path.join(os.path.dirname(__file__), "demo_redbird_forward_mc.png")
     plt.savefig(out_path, dpi=100)
     print(f"\nCross-section plot saved to: {out_path}")
 
