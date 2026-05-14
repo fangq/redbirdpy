@@ -1088,6 +1088,88 @@ def getdistance(
     return dist
 
 
+def getdetdir(cfg: dict) -> np.ndarray:
+    """Estimate inward surface-normal directions at each detector position.
+
+    Port of redbird-m/matlab/rbgetdetdir.m. Used by the Monte Carlo (mmclab)
+    forward path in `runforward` when a Jacobian is requested and the user
+    didn't supply ``cfg["detdir"]``: mmc requires a (Nd, 4) inward-normal +
+    focal-length array to build detector-as-adjoint sources.
+
+    For each detector position, the nearest surface-face center is located
+    and the face normal is oriented toward the mesh centroid (negated to
+    produce the inward direction). This works for convex or quasi-convex
+    domains; for highly non-convex shapes the user should supply
+    ``cfg["detdir"]`` explicitly.
+
+    Parameters
+    ----------
+    cfg : dict
+        Must contain ``cfg["node"]`` (Nn x 3) and ``cfg["elem"]`` (Ne x 4 or
+        5, 1-based) and ``cfg["detpos"]`` (Nd x {3,4}). If ``cfg["face"]``
+        is absent, it is built via ``iso2mesh.volface`` (or the local
+        fallback when iso2mesh isn't available).
+
+    Returns
+    -------
+    detdir : ndarray
+        (Nd, 4) array. Columns 0-2 are unit inward-normal vectors; column 3
+        is the focal-length placeholder (0).
+    """
+    for key in ("node", "elem", "detpos"):
+        if key not in cfg or cfg[key] is None:
+            raise ValueError(f"getdetdir requires cfg['{key}']")
+
+    node = np.asarray(cfg["node"], dtype=float)
+    elem = np.asarray(cfg["elem"], dtype=int)
+    detpos = np.asarray(cfg["detpos"], dtype=float)
+
+    face = cfg.get("face")
+
+    if face is None or len(face) == 0:
+        try:
+            face_result = i2m.volface(elem[:, :4])
+            face = face_result[0] if isinstance(face_result, tuple) else face_result
+        except (NameError, AttributeError):
+            face = _volface_fallback(elem[:, :4])
+
+    face = np.asarray(face, dtype=int)
+    # face is 1-based; convert to 0-based for indexing
+    face0 = face[:, :3] - 1
+
+    ab = node[face0[:, 1], :3] - node[face0[:, 0], :3]
+    ac = node[face0[:, 2], :3] - node[face0[:, 0], :3]
+    nrm = np.cross(ab, ac, axis=1)
+    nlen = np.sqrt(np.sum(nrm * nrm, axis=1))
+    # avoid div-by-zero on degenerate faces; those normals stay zero
+    nlen_safe = np.where(nlen > 0, nlen, 1.0)
+    facenrm = nrm / nlen_safe[:, None]
+
+    facectr = (
+        node[face0[:, 0], :3] + node[face0[:, 1], :3] + node[face0[:, 2], :3]
+    ) / 3.0
+
+    # orient each face normal OUTWARD (away from the mesh centroid), then
+    # negate to get the inward direction used by mmc as the adjoint source
+    # emission direction
+    meshctr = np.mean(node[:, :3], axis=0)
+    out_proj = np.sum(facenrm * (facectr - meshctr), axis=1)
+    flipsign = np.sign(out_proj)
+    flipsign[flipsign == 0] = 1.0
+    facenrm = facenrm * flipsign[:, None]
+
+    detnum = detpos.shape[0]
+    detdir = np.zeros((detnum, 4), dtype=float)
+
+    for d in range(detnum):
+        delta = facectr - detpos[d, :3]
+        d2 = np.sum(delta * delta, axis=1)
+        fid = int(np.argmin(d2))
+        detdir[d, :3] = -facenrm[fid]
+
+    return detdir
+
+
 def getltr(cfg: dict, wv: str = "") -> float:
     """Calculate transport mean free path l_tr = 1/(mua + musp)."""
     from . import property as prop_module

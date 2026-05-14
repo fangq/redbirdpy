@@ -149,8 +149,15 @@ def runrecon(
         if "param" in cfg and isinstance(cfg.get("prop"), dict):
             cfg["prop"] = updateprop(cfg)
 
-        # Run forward simulation
-        detphi, phi = runforward(cfg, solverflag=solverflag, sd=sd, rfcw=rfcw, **kwargs)
+        # Run forward simulation. When cfg.nphoton is set, runforward routes
+        # to the Monte Carlo (pmmc) branch and can return the mesh-mode
+        # adjoint Jacobian directly; we ask for it via return_jacobian=True
+        # and skip the FEM jac() build when Jext is present. The FEM/TD
+        # paths leave Jext = None and fall through to the rbjac equivalent.
+        detphi, phi, Jext = runforward(
+            cfg, solverflag=solverflag, sd=sd, rfcw=rfcw,
+            return_jacobian=True, **kwargs,
+        )
 
         # Build Jacobians
         wavelengths = [""]
@@ -159,16 +166,36 @@ def runrecon(
 
         Jmua = {}
 
-        for wv in wavelengths:
-            sdwv = sd.get(wv, sd) if isinstance(sd, dict) else sd
-            phiwv = phi.get(wv, phi) if isinstance(phi, dict) else phi
+        if Jext is not None and "mua" in Jext:
+            # Monte Carlo path: Jext["mua"] / Jext["dcoeff"] are in the
+            # pmmc-native (Nn, Ns*Nd) orientation. Transpose to (Nsd, Nn) so
+            # the downstream pipeline (jacchrome, jacepssigma, matflat,
+            # _masksum, _remap_jacobian) keeps the same FEM convention as
+            # the rbjac path.
+            jmua_src = Jext["mua"]
 
-            Jmua_n, Jmua_e = jac(
-                sdwv, phiwv, cfg["deldotdel"], cfg["elem"], cfg["evol"]
-            )
-            # Use "mua" as key for single-wavelength case
-            key = "mua" if wv == "" else wv
-            Jmua[key] = Jmua_n
+            if isinstance(jmua_src, dict):
+                for wv in wavelengths:
+                    key = "mua" if wv == "" else wv
+                    Jmua[key] = np.asarray(jmua_src[wv]).T
+            else:
+                # single-wavelength: jmua_src is a 2D array
+                Jmua["mua"] = np.asarray(jmua_src).T
+
+            # Note: Jext["dcoeff"] is currently not consumed by the inversion
+            # loop (D-coefficient recon requires extending Jmua's dict shape;
+            # not in scope for the initial MC integration).
+        else:
+            for wv in wavelengths:
+                sdwv = sd.get(wv, sd) if isinstance(sd, dict) else sd
+                phiwv = phi.get(wv, phi) if isinstance(phi, dict) else phi
+
+                Jmua_n, Jmua_e = jac(
+                    sdwv, phiwv, cfg["deldotdel"], cfg["elem"], cfg["evol"]
+                )
+                # Use "mua" as key for single-wavelength case
+                key = "mua" if wv == "" else wv
+                Jmua[key] = Jmua_n
 
         # Build chromophore Jacobians if multi-spectral, OR MWT Jacobians
         # (epsilon/sigma) if cfg.param has those entries.

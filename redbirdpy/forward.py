@@ -25,36 +25,87 @@ __all__ = [
     "C0",
 ]
 
+import copy
+import warnings
+
 import numpy as np
 from scipy import sparse
 from typing import Dict, Tuple, Optional, Union, List, Any
 
 # Import solver functions from solver module
 from .solver import femsolve
-from .utility import sdmap, getoptodes, deldotdel
+from .utility import sdmap, getoptodes, deldotdel, getdetdir
 from .property import extinction
+
+# Optional Monte Carlo backend (mmc); the MC branch in `runforward` falls back
+# to the FEM solver with a warning when this isn't importable.
+try:
+    import pmmc as _pmmc
+    _HAS_PMMC = True
+except ImportError:
+    _pmmc = None
+    _HAS_PMMC = False
 
 # Speed of light in mm/s
 C0 = 299792458000.0
 R_C0 = 1.0 / C0
 
 
-def runforward(cfg: dict, **kwargs) -> Tuple[Any, Any]:
+def runforward(cfg: dict, **kwargs) -> Tuple[Any, ...]:
     """
     Perform forward simulations at all sources and all wavelengths.
 
-    Time-domain DOT (Crank-Nicolson) is engaged automatically when
-    cfg.tstart, cfg.tstep, and cfg.tend are all defined; the call is
-    delegated to `runtd` which returns 3D arrays (Nn x Nsrc x Nt for phi,
-    Ndet x Nsrc x Nt for detphi).
+    Three execution paths are selected automatically from the cfg fields:
+
+    * **Monte Carlo (mmclab/pmmc)** -- ``cfg["nphoton"]`` is set. Requires
+      ``cfg["node"] + cfg["elem"]`` (tetrahedral mesh; ``cfg["vol"]`` /
+      mcxlab path is not yet supported here). MWT/Helmholtz is forbidden
+      on this path. The optional kwarg ``return_jacobian=True`` requests
+      the mesh-mode adjoint Jacobian as a third return; mmc auto-runs the
+      adjoint kernel and returns ``Jext = {"mua": ..., "dcoeff": ...}``.
+    * **Time-domain FEM (Crank-Nicolson)** -- when ``cfg.tstart``,
+      ``cfg.tstep``, and ``cfg.tend`` are all defined and no nphoton.
+      Delegated to `runtd` (3D arrays Nn x Nsrc x Nt).
+    * **CW / FD FEM** -- default.
+
+    Parameters
+    ----------
+    return_jacobian : bool, kwarg, default False
+        When True, return a 3-tuple (detval, phi, Jext). Jext is the
+        mesh-mode adjoint Jacobian on the MC path with shape
+        (Nn, Ns*Nd) per wavelength (matching the pmmc/mmclab-native
+        orientation); None on FEM/TD paths.
+
+    Notes
+    -----
+    When ``cfg.nphoton`` is set but ``pmmc`` is not importable, this
+    function emits a warning and falls back to the FEM solver.
     """
+    return_jacobian = kwargs.pop("return_jacobian", False)
+
+    # Monte Carlo dispatch (must precede time-domain check; mmc handles its
+    # own time grid).
+    if cfg.get("nphoton") is not None:
+        if not _HAS_PMMC:
+            warnings.warn(
+                "cfg.nphoton is set but pmmc is not importable; falling back "
+                "to the FEM forward. Install pmmc to enable Monte Carlo.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        else:
+            return _runforward_mc(cfg, return_jacobian=return_jacobian, **kwargs)
+
     # Time-domain dispatch (Crank-Nicolson)
     if (
         cfg.get("tstart") is not None
         and cfg.get("tstep") is not None
         and cfg.get("tend") is not None
     ):
-        return runtd(cfg, **kwargs)
+        td_result = runtd(cfg, **kwargs)
+        if return_jacobian:
+            return (*td_result, None)
+        return td_result
 
     solverflag = kwargs.get("solverflag", {})
     rfcw = kwargs.get("rfcw", [1])
@@ -99,7 +150,272 @@ def runforward(cfg: dict, **kwargs) -> Tuple[Any, Any]:
         phi_out = phi_out[rfcw[0]]["phi"]
         detval_out = detval_out[rfcw[0]]["detphi"]
 
+    if return_jacobian:
+        return detval_out, phi_out, None
     return detval_out, phi_out
+
+
+def _runforward_mc(
+    cfg: dict, return_jacobian: bool = False, **kwargs
+) -> Tuple[Any, ...]:
+    """Monte Carlo forward branch of ``runforward``.
+
+    Port of the mmclab path in redbird-m/matlab/rbrunforward.m (lines
+    98-280). Routes the cfg through ``pmmc`` once per wavelength,
+    rebuilds detector readings via barycentric interpolation, and packs
+    the mesh-mode adjoint Jacobian into the optional 3rd return when
+    requested.
+    """
+    if cfg.get("helmholtz") or cfg.get("bulkprop") is not None:
+        raise ValueError(
+            "MWT/Helmholtz forward (cfg.helmholtz / cfg.bulkprop) cannot "
+            "be combined with the Monte Carlo path. Remove cfg.nphoton."
+        )
+
+    if "node" not in cfg or "elem" not in cfg:
+        raise ValueError(
+            "MC forward requires cfg.node and cfg.elem (tetrahedral mesh)."
+        )
+
+    # work on a shallow copy so per-wavelength edits don't leak back to caller
+    cfg = copy.copy(cfg)
+    # ensure cfg.prop isn't shared with caller across our pop/restore
+    if "prop" in cfg:
+        cfg["prop"] = copy.copy(cfg["prop"])
+
+    # default single-gate CW time grid
+    if cfg.get("tstart") is None:
+        cfg["tstart"] = 0.0
+    if cfg.get("tend") is None:
+        cfg["tend"] = 5e-9
+    if cfg.get("tstep") is None:
+        cfg["tstep"] = cfg["tend"]
+
+    avgsize = kwargs.get("avgsize", 1.0)
+
+    srcpos = np.atleast_2d(np.asarray(cfg["srcpos"], dtype=float))
+    detpos = np.atleast_2d(np.asarray(cfg["detpos"], dtype=float))
+    srcnum = srcpos.shape[0]
+    detnum = detpos.shape[0]
+
+    # ensure detector radius (column 3) is set for the disk-source adjoint
+    if detpos.shape[1] == 3:
+        radius_col = np.full((detnum, 1), avgsize)
+        detpos = np.hstack([detpos, radius_col])
+        cfg["detpos"] = detpos
+
+    cfg["method"] = "elem"
+    cfg["basisorder"] = 1
+    if "seg" in cfg and "elemprop" not in cfg:
+        cfg["elemprop"] = np.asarray(cfg["seg"]).astype(np.int32).ravel()
+
+    need_jacobian = bool(return_jacobian)
+
+    if need_jacobian:
+        # require cfg.detdir; build it if missing
+        detdir = cfg.get("detdir")
+        if detdir is None or len(np.asarray(detdir)) == 0:
+            cfg["detdir"] = getdetdir(cfg)
+        cfg["detdir"] = np.atleast_2d(np.asarray(cfg["detdir"], dtype=float))
+        if cfg["detdir"].shape[1] < 4:
+            pad = np.zeros((cfg["detdir"].shape[0], 4 - cfg["detdir"].shape[1]))
+            cfg["detdir"] = np.hstack([cfg["detdir"], pad])
+        cfg["srcid"] = -1
+        cfg["outputtype"] = "adjoint_mua_d"
+    elif cfg.get("detdir") is not None and len(np.asarray(cfg["detdir"])) > 0:
+        # forward-only but user wants detector slots too
+        cfg["detdir"] = np.atleast_2d(np.asarray(cfg["detdir"], dtype=float))
+        if cfg["detdir"].shape[1] < 4:
+            pad = np.zeros((cfg["detdir"].shape[0], 4 - cfg["detdir"].shape[1]))
+            cfg["detdir"] = np.hstack([cfg["detdir"], pad])
+        cfg["srcid"] = -2
+        cfg["outputtype"] = "fluence"
+    else:
+        cfg["outputtype"] = "fluence"
+
+    # multi-wavelength dispatch (mmc/pmmc is single-wavelength per call)
+    is_multi_wv = isinstance(cfg.get("prop"), dict)
+    if is_multi_wv:
+        wavelengths = list(cfg["prop"].keys())
+        prop_all = cfg["prop"]
+        phi_out: Any = {}
+        detval_out: Any = {}
+        Jmua_map: Dict[str, np.ndarray] = {}
+        Jd_map: Dict[str, np.ndarray] = {}
+    else:
+        wavelengths = [""]
+        prop_all = None
+
+    # precompute (optode_loc, optode_bary) for detector interpolation
+    optode_loc, optode_bary = _tsearchn_bary(
+        np.asarray(cfg["node"], dtype=float),
+        np.asarray(cfg["elem"], dtype=int)[:, :4],
+        detpos[:, :3],
+    )
+
+    # broadcast srcdir to match srcnum rows so pmmc's multi-source parser is
+    # happy (it requires matching row counts)
+    srcdir = np.atleast_2d(np.asarray(cfg["srcdir"], dtype=float))
+    if srcdir.shape[0] == 1 and srcnum > 1:
+        srcdir = np.tile(srcdir, (srcnum, 1))
+    cfg["srcdir"] = srcdir
+    cfg["srcpos"] = srcpos
+
+    for wv in wavelengths:
+        if is_multi_wv:
+            cfg["prop"] = prop_all[wv]
+
+        prop_arr = np.asarray(cfg["prop"], dtype=float)
+        n_node = int(np.asarray(cfg["node"]).shape[0])
+
+        # Per-node optical-property mode for DOT reconstruction: when
+        # cfg.prop has one row per forward-mesh node, route mua (and musp
+        # for RF) into cfg.nodemua / cfg.nodemusp so mmc's per-node global-
+        # memory path is engaged.
+        if prop_arr.ndim == 2 and prop_arr.shape[0] == n_node:
+            cfg["nodemua"] = prop_arr[:, 0].astype(np.float32, copy=True)
+            cfg["isnodalmua"] = 1
+            if cfg.get("omega", 0) > 0:
+                cfg["nodemusp"] = prop_arr[:, 1].astype(np.float32, copy=True)
+                cfg["isnodalmusp"] = 1
+            bulk = np.mean(prop_arr, axis=0)
+            if bulk[1] < 1e-3:
+                bulk[1] = 1e-3
+            cfg["prop"] = np.array(
+                [[0.0, 0.0, 1.0, 1.0], [bulk[0], bulk[1], 0.0, bulk[3]]],
+                dtype=float,
+            )
+            cfg["elemprop"] = np.ones(np.asarray(cfg["elem"]).shape[0], dtype=np.int32)
+
+        # let pmmc's multi-source parser rebuild srcdata fresh from srcpos
+        cfg.pop("srcdata", None)
+        cfg.pop("extrasrclen", None)
+
+        out = _pmmc.run(cfg)
+
+        # mmc flux.data layouts:
+        #   single source, single gate            : (nn,)
+        #   single source, maxgate > 1            : (nn, maxgate)
+        #   multi-source / detector-adjoint mode  : (nn, maxgate, Ns+Nd)
+        # Normalize to (nn, Ns_total) by dropping the gate axis and ensuring
+        # a second source-slot axis is always present.
+        raw_phi = np.asarray(out["flux"])
+        if raw_phi.ndim == 3:
+            # (nn, maxgate, slots) - take gate 0 (CW)
+            phi_wv = raw_phi[:, 0, :]
+        elif raw_phi.ndim == 2:
+            # (nn, maxgate) - single source, multiple gates
+            phi_wv = raw_phi[:, :1]
+        else:
+            # (nn,) - single source, single gate
+            phi_wv = raw_phi.reshape(-1, 1)
+        # transpose if mmc returned (slots, nn) instead of (nn, slots)
+        if phi_wv.ndim == 2 and phi_wv.shape[0] != n_node and phi_wv.shape[1] == n_node:
+            phi_wv = phi_wv.T
+
+        # detphi[d, s] = forward fluence from source s evaluated at detector d
+        detphi_wv = np.full((detnum, srcnum), np.nan)
+        elem = np.asarray(cfg["elem"], dtype=int)
+        for d in range(detnum):
+            eid = optode_loc[d]
+            if eid >= 0:
+                nodes_d = elem[eid, :4] - 1  # to 0-based
+                detphi_wv[d, :] = optode_bary[d] @ phi_wv[nodes_d, :srcnum]
+
+        if is_multi_wv:
+            phi_out[wv] = phi_wv
+            detval_out[wv] = detphi_wv
+            if need_jacobian:
+                # mmclab/pmmc-native orientation: (Nn, Ns*Nd). Downstream
+                # consumers (e.g. runrecon's MC branch) transpose only when
+                # they need the (Nsd, Nn) layout used by the FEM jac() path.
+                Jmua_map[wv] = np.asarray(out["jmua"], dtype=float)
+                Jd_map[wv] = np.asarray(out["jd"], dtype=float)
+        else:
+            phi_out = phi_wv
+            detval_out = detphi_wv
+            if need_jacobian:
+                Jext_single = {
+                    "mua": np.asarray(out["jmua"], dtype=float),
+                    "dcoeff": np.asarray(out["jd"], dtype=float),
+                }
+
+    if is_multi_wv and need_jacobian:
+        Jext = {"mua": Jmua_map, "dcoeff": Jd_map}
+    elif need_jacobian:
+        Jext = Jext_single
+    else:
+        Jext = None
+
+    if return_jacobian:
+        return detval_out, phi_out, Jext
+    return detval_out, phi_out
+
+
+def _tsearchn_bary(
+    node: np.ndarray, elem: np.ndarray, pts: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Locate each point in ``pts`` inside a tet mesh and compute its
+    barycentric coordinates.
+
+    Mirrors ``[loc, bary] = tsearchn(node, elem, pts)`` from MATLAB.
+
+    Parameters
+    ----------
+    node : ndarray  (Nn, 3)
+    elem : ndarray  (Ne, 4)   -- 1-based vertex indices
+    pts  : ndarray  (Np, 3)
+
+    Returns
+    -------
+    loc  : ndarray  (Np,)     -- 0-based element index, -1 when not inside any
+    bary : ndarray  (Np, 4)   -- barycentric weights (sum to 1 when loc >= 0)
+    """
+    try:
+        from scipy.spatial import Delaunay
+    except ImportError:  # pragma: no cover -- scipy is a hard dep elsewhere
+        raise ImportError("scipy.spatial.Delaunay is required for _tsearchn_bary")
+
+    np_pts = pts.shape[0]
+    loc = np.full(np_pts, -1, dtype=np.int64)
+    bary = np.zeros((np_pts, 4), dtype=float)
+
+    # Build a Delaunay tessellation just for the point-location query, then
+    # match each found simplex back to the user's elem table by vertex set.
+    # For a forward mesh whose elem already IS a Delaunay tessellation this
+    # is a wash; for user meshes it's a robust fallback at the cost of one
+    # rebuild.
+    elem0 = elem.astype(int) - 1
+    dt = Delaunay(node[:, :3])
+
+    found = dt.find_simplex(pts[:, :3])
+
+    # Map Delaunay simplex -> element index by sorted vertex tuple
+    elem_keys = {tuple(sorted(row)): i for i, row in enumerate(elem0)}
+
+    for p in range(np_pts):
+        s = found[p]
+        if s < 0:
+            continue
+        vidx = dt.simplices[s]
+        key = tuple(sorted(vidx.tolist()))
+        eid = elem_keys.get(key)
+        if eid is None:
+            continue
+        loc[p] = eid
+        # barycentric weights against the user's vertex order: solve
+        # A @ bary = b where A rows are [v0 v1 v2 v3; 1 1 1 1] (4x4) and
+        # b = [pt; 1]
+        ee = elem0[eid]
+        A = np.vstack([node[ee, :3].T, np.ones(4)])
+        b = np.append(pts[p, :3], 1.0)
+        try:
+            w = np.linalg.solve(A, b)
+        except np.linalg.LinAlgError:
+            continue
+        bary[p] = w
+
+    return loc, bary
 
 
 def runtd(cfg: dict, **kwargs) -> Tuple[Any, Any]:
