@@ -23,6 +23,9 @@ __all__ = [
     "matflat",
     "prior",
     "syncprop",
+    "multispectral",
+    "createinv",
+    "regemperical",
 ]
 
 import numpy as np
@@ -31,10 +34,10 @@ from scipy.sparse.linalg import spsolve
 from typing import Dict, Tuple, Optional, Union, List, Any
 import warnings
 
-from .forward import runforward, jac, jacchrome, jacepssigma
+from .forward import runforward, jac, jacchrome, jacepssigma, jacscat
 from .solver import femsolve
 from .utility import sdmap, meshinterp
-from .property import updateprop
+from .property import updateprop, extinction
 
 
 def runrecon(
@@ -928,3 +931,325 @@ def _masksum(data: np.ndarray, mask: np.ndarray) -> np.ndarray:
         result[:, i] = np.sum(data[:, idx], axis=1)
 
     return result
+
+
+def multispectral(
+    sd: Union[np.ndarray, dict],
+    cfg: dict,
+    Jmua: Union[np.ndarray, dict],
+    y0: Union[np.ndarray, dict],
+    phi: Union[np.ndarray, dict],
+    params: dict,
+    rfcw: Union[int, list] = 1,
+    Jd: Union[np.ndarray, dict, None] = None,
+    prop: Union[np.ndarray, dict, None] = None,
+) -> Tuple[Union[dict, np.ndarray], np.ndarray, np.ndarray]:
+    """Concatenate multi-spectral forward data into a single linear system.
+
+    Port of redbird-m/matlab/rbmultispectral.m.  When ``Jmua`` is keyed
+    by wavelength, builds either a chromophore-space Jacobian (DOT) or
+    an eps/sigma Jacobian (MWT) by chaining through the per-wavelength
+    extinction coefficients / Helmholtz physics.  Optionally adds the
+    scattering-amplitude and scattering-power Jacobians when ``Jd`` is
+    supplied and the parameter struct names ``scatamp`` / ``scatpow``
+    (or the 500 nm-normalized variants ``scatamp500`` / ``scatpow500``).
+
+    Parameters
+    ----------
+    sd : ndarray or dict
+        Source-detector mapping table.  ``(Nsd, {3,4})`` or a dict
+        keyed by wavelength.
+    cfg : dict
+        Forward configuration (used for ``cfg.omega`` in the MWT path).
+    Jmua : ndarray or dict
+        Per-wavelength ``mua`` Jacobian.  ``(Nsd, Nn)`` per wavelength;
+        dict keyed by wavelength when multi-spectral.
+    y0 : ndarray or dict
+        Measurement data (matching shape of detphi).
+    phi : ndarray or dict
+        Model prediction at detectors.
+    params : dict
+        Parameter struct (chromophore concentrations OR eps/sigma for
+        MWT, optionally with ``scatamp``/``scatpow`` for scattering).
+    rfcw : int or list, default 1
+        Forward modes to flatten (1 = RF, 2 = CW, [1, 2] = both).
+    Jd : ndarray or dict, optional
+        Diffusion-coefficient Jacobian.  Triggers the scattering chain
+        when ``params`` names ``scatamp``/``scatpow``.
+    prop : dict, optional
+        Per-wavelength property table.  Required for the scattering
+        chain (used to extract dcoeff).
+
+    Returns
+    -------
+    newJ : dict
+        Concatenated chromophore / eps-sigma / scattering Jacobian.
+    newy0 : ndarray
+        Concatenated measurement vector (sd column 2 == 1 filter).
+    newphi : ndarray
+        Concatenated model prediction vector.
+    """
+    if isinstance(rfcw, int):
+        rfcw = [rfcw]
+
+    is_helmholtz = isinstance(params, dict) and (
+        "epsilon" in params or "sigma" in params
+    )
+
+    newJ: Union[dict, np.ndarray] = {}
+
+    if isinstance(Jmua, dict):
+        wavelengths = list(Jmua.keys())
+
+        if is_helmholtz:
+            # MWT: chain J_mua -> J_eps / J_sigma per frequency
+            eps0_mm = 8.854187817e-15
+            mu0_mm = 4 * np.pi * 1e-10
+            omegas = np.zeros(len(wavelengths))
+            for i, wv in enumerate(wavelengths):
+                omega = cfg.get("omega", 0)
+                if isinstance(omega, dict):
+                    omegas[i] = omega.get(wv, 0)
+                else:
+                    omegas[i] = omega
+            weight_eps = -(omegas**2) * mu0_mm * eps0_mm
+            weight_sigma = 1j * omegas * mu0_mm
+
+            if "epsilon" in params:
+                newJ["epsilon"] = matflat(Jmua, weight_eps)
+            if "sigma" in params:
+                newJ["sigma"] = matflat(Jmua, weight_sigma)
+        else:
+            # DOT chromophore + (optional) scattering chain
+            paramlist = list(params.keys()) if isinstance(params, dict) else []
+            has_norm_scat = "scatamp500" in paramlist and "scatpow500" in paramlist
+            has_legacy_scat = "scatamp" in paramlist and "scatpow" in paramlist
+
+            Jscat = None
+            if (
+                Jd is not None
+                and (has_norm_scat or has_legacy_scat)
+                and isinstance(Jd, dict)
+                and prop is not None
+            ):
+                # build per-wavelength D from prop
+                dcoeff = {}
+                for wv in wavelengths:
+                    dtemp = (
+                        np.asarray(prop[wv])
+                        if isinstance(prop, dict)
+                        else np.asarray(prop)
+                    )
+                    # drop the "outside" row (row 0) when prop has Nn+1 rows
+                    if dtemp.ndim == 2 and dtemp.shape[0] < Jd[wv].shape[1]:
+                        dtemp = dtemp[1:, :]
+                    dcoeff[wv] = (1.0 / (3.0 * (dtemp[:, 0] + dtemp[:, 1]))).T
+
+                if has_norm_scat:
+                    Jscat = jacscat(
+                        Jd,
+                        dcoeff,
+                        params["scatpow500"],
+                        wv=wavelengths,
+                        lref=500.0,
+                        suffix="500",
+                    )
+                else:
+                    Jscat = jacscat(
+                        Jd,
+                        dcoeff,
+                        params["scatpow"],
+                        wv=wavelengths,
+                        lref=1e9,
+                    )
+
+            chromophores = [
+                k for k in paramlist if k in ("hbo", "hbr", "water", "lipids", "aa3")
+            ]
+            newJ = jacchrome(Jmua, chromophores) if chromophores else {}
+
+            if Jscat is not None:
+                for key, val in Jscat.items():
+                    newJ[key] = val
+    else:
+        newJ["mua"] = Jmua
+        if Jd is not None and not isinstance(Jd, dict):
+            newJ["dcoeff"] = Jd
+
+    if Jd is not None and not isinstance(Jd, dict) and "dcoeff" not in newJ:
+        newJ["dcoeff"] = Jd
+
+    # ---- flatten y0 ----
+    newy0 = _flatten_msdata(y0, sd, rfcw)
+    # ---- flatten phi (model prediction) ----
+    newphi = _flatten_msdata(phi, sd, rfcw)
+
+    return newJ, newy0, newphi
+
+
+def _flatten_msdata(
+    data: Union[np.ndarray, dict], sd: Union[np.ndarray, dict], rfcw: list
+) -> np.ndarray:
+    """Helper for multispectral: stack per-wavelength detphi vectors
+    filtered by the sd column-2 active-pair mask, matching the inner
+    loops of rbmultispectral.m lines 133-199."""
+    if not isinstance(data, dict):
+        return np.asarray(data)
+
+    wavelengths = list(data.keys())
+    out_blocks = {j: [] for j in rfcw}
+
+    for wv in wavelengths:
+        sdwv = sd[wv] if isinstance(sd, dict) else sd
+        sd_arr = np.asarray(sdwv)
+        if sd_arr.shape[1] == 3:
+            sd_arr = np.column_stack([sd_arr, np.full(sd_arr.shape[0], rfcw[0])])
+
+        for j in rfcw:
+            mask_pair = (sd_arr[:, 3] == j) | (sd_arr[:, 3] == 3)
+            sd_active = sd_arr[mask_pair]
+            keep = sd_active[:, 2] == 1
+            tempphi = np.asarray(data[wv]).ravel(order="F")[: sd_active.shape[0]]
+            tempphi = tempphi[keep]
+            out_blocks[j].append(tempphi)
+
+    stacked = {
+        j: np.concatenate(out_blocks[j]) if out_blocks[j] else np.array([])
+        for j in rfcw
+    }
+
+    if len(rfcw) == 1:
+        return stacked[rfcw[0]]
+    return np.concatenate([stacked[j] for j in rfcw])
+
+
+def createinv(
+    Amat: Union[np.ndarray, dict],
+    ymeas: Union[np.ndarray, dict],
+    ymodel: Union[np.ndarray, dict],
+    params: Optional[dict] = None,
+    output: str = "complex",
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    """Reformulate the inverse problem in complex / real / log-phase form.
+
+    Port of redbird-m/matlab/rbcreateinv.m.  Splits a complex-valued
+    linear system into a real-valued one when ``output`` selects
+    ``'real'`` (block-diagonal Re/Im) or ``'logphase'`` (log-amplitude
+    + unwrapped-phase form for RF measurements).
+
+    Parameters
+    ----------
+    Amat : ndarray or dict
+        LHS (per-wavelength when dict).
+    ymeas, ymodel : ndarray or dict
+        Complex measurement and model vectors.
+    params : dict, optional
+        Chromophore parameter struct.  When supplied, the columns of the
+        per-wavelength Amat are weighted by the extinction coefficients
+        and stacked per chromophore.
+    output : {'complex', 'real', 'logphase'}, default 'complex'
+
+    Returns
+    -------
+    finalAmat : ndarray
+        Reformulated LHS matrix.
+    finalrhs : ndarray
+        Reformulated RHS vector ``ymeas - ymodel`` (with sign + log-phase
+        transformation applied as appropriate).
+    nblock : int
+        ``2`` when the complex-to-real split doubled the system,
+        ``1`` otherwise.
+    """
+    if not isinstance(Amat, dict):
+        Amat = {"_": Amat}
+        ymeas = {"_": ymeas}
+        ymodel = {"_": ymodel}
+
+    wavelengths = list(Amat.keys())
+    newA: Dict[str, np.ndarray] = {}
+    newrhs: Dict[str, np.ndarray] = {}
+    nblock = 1
+
+    if output == "complex":
+        newA = {wv: Amat[wv] for wv in wavelengths}
+        for wv in wavelengths:
+            newrhs[wv] = ymeas[wv] - ymodel[wv]
+    else:
+        for wv in wavelengths:
+            A_wv = np.asarray(Amat[wv])
+            rhs = np.asarray(ymeas[wv]) - np.asarray(ymodel[wv])
+
+            if output == "real":
+                if np.iscomplexobj(rhs) and np.iscomplexobj(A_wv):
+                    newA[wv] = np.block(
+                        [[A_wv.real, -A_wv.imag], [A_wv.imag, A_wv.real]]
+                    )
+                    newrhs[wv] = np.concatenate([rhs.real, rhs.imag])
+                    nblock = 2
+                else:
+                    newA[wv] = A_wv.real
+                    newrhs[wv] = rhs.real
+
+            elif output == "logphase":
+                ymod = np.asarray(ymodel[wv])
+                temp_scalar = np.conj(ymod) / (np.abs(ymod) ** 2)
+                # broadcast: each row of A weighted by ymod-scalar at that row
+                temp = temp_scalar[:, np.newaxis] * A_wv
+                log_diff = np.log(np.abs(np.asarray(ymeas[wv]))) - np.log(np.abs(ymod))
+
+                if np.isrealobj(ymod):
+                    newA[wv] = temp.real
+                    newrhs[wv] = log_diff.ravel()
+                else:
+                    phase_diff = np.angle(np.asarray(ymeas[wv])) - np.angle(ymod)
+                    newA[wv] = np.vstack([temp.real, temp.imag])
+                    newrhs[wv] = np.concatenate([log_diff.ravel(), phase_diff.ravel()])
+                    nblock = 2
+            else:
+                raise ValueError(f"Unknown output mode: {output!r}")
+
+    if isinstance(params, dict):
+        chromos = [
+            k for k in params.keys() if k in ("hbo", "hbr", "water", "lipids", "aa3")
+        ]
+        if not chromos:
+            raise ValueError("createinv: params must contain at least one chromophore")
+        extins, _ = extinction(wavelengths, chromos)
+        finalA_rows = []
+        finalrhs_rows = []
+        for i, wv in enumerate(wavelengths):
+            row_blocks = [newA[wv] * extins[i, j] for j in range(len(chromos))]
+            finalA_rows.append(np.hstack(row_blocks))
+            finalrhs_rows.append(newrhs[wv])
+        finalAmat = np.vstack(finalA_rows)
+        finalrhs = np.concatenate(finalrhs_rows)
+    else:
+        finalAmat = np.vstack([newA[wv] for wv in wavelengths])
+        finalrhs = np.concatenate([newrhs[wv] for wv in wavelengths])
+
+    return finalAmat, finalrhs, nblock
+
+
+def regemperical(Hess: np.ndarray, residual: float, alpha: float) -> float:
+    """Empirical regularization parameter estimate.
+
+    Port of redbird-m/matlab/rbregemperical.m.
+
+        lambda = alpha * mean(diag(Hess)) * residual^2
+
+    Parameters
+    ----------
+    Hess : ndarray  (Np x Np)
+        Gauss-Newton Hessian.
+    residual : float
+        Total data-model misfit residual from the previous iteration.
+    alpha : float
+        Empirical scaling factor.
+
+    Returns
+    -------
+    lambda_ : float
+        Empirical regularization parameter.
+    """
+    ggav = np.mean(np.diag(np.asarray(Hess)))
+    return alpha * ggav * residual * residual

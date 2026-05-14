@@ -1170,6 +1170,38 @@ def getdetdir(cfg: dict) -> np.ndarray:
     return detdir
 
 
+def getcfg(cfgs: dict, key) -> dict:
+    """Extract a single-wavelength cfg from a multi-spectral cfg dict.
+
+    Port of redbird-m/matlab/rbgetcfg.m.  Walks the top-level cfg keys
+    and, for any value that is itself a dict keyed by wavelength,
+    returns the value for ``key``.  Non-dict values pass through
+    unchanged.  When the input cfg contains no multi-spectral fields,
+    the return is structurally identical to the input.
+
+    Parameters
+    ----------
+    cfgs : dict
+        Multi-spectral simulation configuration.  Any field may be
+        either a plain value or a dict keyed by wavelength.
+    key : str or numeric
+        Wavelength selector.  Converted to ``str`` for dict lookup.
+
+    Returns
+    -------
+    cfgkey : dict
+        Single-wavelength view of ``cfgs``.
+    """
+    key_str = str(key)
+    out = {}
+    for k, v in cfgs.items():
+        if isinstance(v, dict) and key_str in v:
+            out[k] = v[key_str]
+        else:
+            out[k] = v
+    return out
+
+
 def getltr(cfg: dict, wv: str = "") -> float:
     """Calculate transport mean free path l_tr = 1/(mua + musp)."""
     from . import property as prop_module

@@ -22,6 +22,12 @@ __all__ = [
     "jac",
     "jacchrome",
     "jacepssigma",
+    "jacmuafast",
+    "jacmus",
+    "jacscatamp",
+    "jacscatpow",
+    "jacscat",
+    "jacnode",
     "C0",
 ]
 
@@ -1289,3 +1295,258 @@ def jacepssigma(
     if has_sigma:
         Jchain["sigma"] = Jsigma
     return Jchain
+
+
+def jacmuafast(sd, phi, nvol, elem=None):
+    """Approximated nodal-adjoint Jacobian for ``mua``.
+
+    Port of redbird-m/matlab/rbjacmuafast.m.  Implements the nodal-adjoint
+    closed-form J_mua(n) = -V_n * phi_s(n) * phi_r(n) derived in
+    Q. Fang's PhD thesis (Chap. 6 sssec:3d3d:nodal, eq.
+    3d3d:adjoint:nodal).  Cheaper than the full FEM ``jac`` build; valid
+    when the forward mesh is much finer than the parameter mesh.
+
+    Parameters
+    ----------
+    sd : ndarray  (Nsd x {3,4})
+        Source-detector mapping table (1-based source/detector columns).
+    phi : ndarray or dict
+        Forward nodal fluence.  ``(Nn, Nsrc+Ndet)`` for a single
+        wavelength, or a dict keyed by wavelength.
+    nvol : ndarray
+        Nodal Voronoi volumes (length Nn).  When ``len(nvol) == Ne``
+        instead, ``nvol`` is interpreted as element volumes and the
+        result is scattered to nodes via the 0.25 weight from
+        ``elem2node``.
+    elem : ndarray, optional
+        Element list (Ne x 4, 1-based).  Required when ``nvol`` is
+        per-element rather than per-node.
+
+    Returns
+    -------
+    Jmua : ndarray or dict
+        ``(Nsd, Nn)`` per wavelength; dict keyed by wavelength when
+        ``phi`` is multi-spectral.
+    """
+    if sd is None or phi is None or nvol is None:
+        raise ValueError("jacmuafast requires sd, phi, and nvol")
+
+    is_multi = isinstance(phi, dict)
+    if is_multi:
+        wavelengths = list(phi.keys())
+    else:
+        wavelengths = [""]
+        phi = {"": phi}
+
+    Jmua_out = {}
+    nvol = np.asarray(nvol).ravel()
+
+    for wv in wavelengths:
+        phiwv = np.asarray(phi[wv])
+        sdwv = sd[wv] if isinstance(sd, dict) else sd
+        sd_arr = np.asarray(sdwv)
+        nsd = sd_arr.shape[0]
+        # sd columns 0 and 1 are 1-based src/det indices into phi columns
+        src_cols = sd_arr[:, 0].astype(int) - 1
+        det_cols = sd_arr[:, 1].astype(int) - 1
+
+        if phiwv.shape[0] == nvol.size:
+            # nvol is per-node: direct elementwise build
+            Ja = np.empty((nsd, phiwv.shape[0]), dtype=phiwv.dtype)
+            for i in range(nsd):
+                Ja[i, :] = phiwv[:, src_cols[i]] * phiwv[:, det_cols[i]] * nvol
+        elif elem is not None and nvol.size == np.asarray(elem).shape[0]:
+            # nvol is per-element: scatter and convert to nodes via 0.25 sum
+            elem_arr = np.asarray(elem)[:, :4].astype(int) - 1
+            Ne = elem_arr.shape[0]
+            Ja_elem = np.zeros((Ne, nsd), dtype=phiwv.dtype)
+            for i in range(nsd):
+                for j in range(4):
+                    Ja_elem[:, i] += (
+                        phiwv[elem_arr[:, j], src_cols[i]]
+                        * phiwv[elem_arr[:, j], det_cols[i]]
+                        * nvol
+                    )
+            Ja = Ja_elem.T * 0.25
+        else:
+            raise ValueError(
+                "jacmuafast: phi rows must match len(nvol) (nodal) "
+                "or nvol must match elem rows (per-element)"
+            )
+
+        # Increasing mua decreases phi -> sign flip
+        Jmua_out[wv] = -Ja
+
+    if not is_multi:
+        return Jmua_out[""]
+    return Jmua_out
+
+
+def jacmus(Jd, musp, g=0.0):
+    """Convert the diffusion-coefficient Jacobian into a ``mus'`` Jacobian.
+
+    Port of redbird-m/matlab/rbjacmus.m.
+
+        J_mus' = -J_D / (3 * mus'^2 * (1 - g))
+
+    Parameters
+    ----------
+    Jd : ndarray
+        Jacobian of the diffusion coefficient D.
+    musp : float or ndarray
+        Reduced scattering coefficient (per-node or scalar).
+    g : float, default 0
+        Anisotropy.
+    """
+    factor = 1.0 / (3.0 * np.asarray(musp) * np.asarray(musp) * (1.0 - g))
+    return -np.asarray(Jd) * factor
+
+
+def jacscatamp(Jd, dcoeff, wavelen, scatpow, lref=1e9):
+    """Jacobian of the scattering amplitude from the diffusion-coeff Jacobian.
+
+    Port of redbird-m/matlab/rbjacscatamp.m.  Power-law model
+    ``musp = scatamp * (wavelen / lref)^(-scatpow)`` gives
+    ``dD/dscatamp = -3 * D^2 * (wavelen/lref)^(-scatpow)``.
+
+    Parameters
+    ----------
+    Jd : ndarray
+        Jacobian of the diffusion coefficient.
+    dcoeff : ndarray
+        Diffusion coefficient values at each node.
+    wavelen : float
+        Wavelength in nm.
+    scatpow : float or ndarray
+        Current scattering-power estimate (scalar or per-node).
+    lref : float, default 1e9
+        Reference wavelength in nm.  Use ``500`` for the
+        500 nm-normalized convention.
+
+    Returns
+    -------
+    Jscatamp : ndarray
+        Jacobian of the scattering amplitude.
+    """
+    dDdscatamp = (
+        -3.0
+        * np.asarray(dcoeff)
+        * np.asarray(dcoeff)
+        * (np.asarray(wavelen) / lref) ** (-np.asarray(scatpow))
+    )
+    return np.asarray(Jd) * dDdscatamp
+
+
+def jacscatpow(Jd, dcoeff, wavelen, lref=1e9):
+    """Jacobian of the scattering power from the diffusion-coeff Jacobian.
+
+    Port of redbird-m/matlab/rbjacscatpow.m.
+        dD/dscatpow = D * log(wavelen / lref)
+
+    Parameters
+    ----------
+    Jd : ndarray
+        Jacobian of the diffusion coefficient.
+    dcoeff : ndarray
+        Diffusion coefficient values at each node.
+    wavelen : float
+        Wavelength in nm.
+    lref : float, default 1e9
+        Reference wavelength in nm.
+
+    Returns
+    -------
+    Jscatpow : ndarray
+        Jacobian of the scattering-power parameter.
+    """
+    dDdscatpow = np.asarray(dcoeff) * np.log(np.asarray(wavelen) / lref)
+    return np.asarray(Jd) * dDdscatpow
+
+
+def jacscat(Jd, dcoeff, scatpow, wv=None, lref=1e9, suffix=""):
+    """Build scattering-amplitude and scattering-power Jacobians from J_D.
+
+    Port of redbird-m/matlab/rbjacscat.m.  Wraps :func:`jacscatamp` and
+    :func:`jacscatpow` over multiple wavelengths and packages the
+    results in a dict keyed by ``scatamp<suffix>`` and ``scatpow<suffix>``.
+
+    Parameters
+    ----------
+    Jd : dict
+        Jacobian of the diffusion coefficient keyed by wavelength (str).
+    dcoeff : dict
+        Diffusion coefficient at each node keyed by wavelength.
+    scatpow : float or ndarray
+        Current scattering-power estimate.
+    wv : iterable of str, optional
+        Wavelength list.  Defaults to ``Jd.keys()``.
+    lref : float, default 1e9
+        Reference wavelength in nm.  Pass ``500`` for the 500 nm-
+        normalized convention.
+    suffix : str, default ''
+        Suffix appended to the output keys (e.g. ``'500'`` yields
+        ``scatamp500`` / ``scatpow500``).
+
+    Returns
+    -------
+    Jscat : dict
+        ``{f'scatamp{suffix}': vstacked_J, f'scatpow{suffix}': vstacked_J}``.
+        Each value is the per-wavelength Jacobian rows vertically
+        stacked, matching rbjacscat.m's behaviour.
+    """
+    if not isinstance(Jd, dict):
+        raise TypeError("jacscat requires Jd as a dict keyed by wavelength")
+
+    if wv is None:
+        wv = list(Jd.keys())
+
+    ampname = f"scatamp{suffix}"
+    powname = f"scatpow{suffix}"
+
+    amp_blocks = []
+    pow_blocks = []
+    for wv_str in wv:
+        wv_num = float(wv_str)
+        amp_blocks.append(jacscatamp(Jd[wv_str], dcoeff[wv_str], wv_num, scatpow, lref))
+        pow_blocks.append(jacscatpow(Jd[wv_str], dcoeff[wv_str], wv_num, lref))
+
+    return {
+        ampname: np.vstack(amp_blocks),
+        powname: np.vstack(pow_blocks),
+    }
+
+
+def jacnode(Jmua_elem, Jd_elem=None, elem=None, nodelen=None):
+    """Convert element-based Jacobians to node-based Jacobians.
+
+    Port of redbird-m/matlab/rbjacnode.m.  Uses the same elem-to-node
+    0.25-weighted scatter as :func:`redbirdpy.utility.elem2node`.
+
+    Parameters
+    ----------
+    Jmua_elem : ndarray  (Nsd x Ne)
+        Element-wise Jacobian of ``mua``.
+    Jd_elem : ndarray, optional  (Nsd x Ne)
+        Element-wise Jacobian of the diffusion coefficient.
+    elem : ndarray  (Ne x 4, 1-based)
+        Mesh element list.
+    nodelen : int
+        Total node count.
+
+    Returns
+    -------
+    Jmua_node : ndarray  (Nsd x Nn)
+    Jd_node : ndarray  (Nsd x Nn), only when ``Jd_elem`` is provided
+    """
+    if elem is None or nodelen is None:
+        raise ValueError("jacnode requires elem and nodelen")
+
+    from .utility import elem2node
+
+    Jmua_node = elem2node(elem, Jmua_elem, nodelen)
+
+    if Jd_elem is None:
+        return Jmua_node
+
+    Jd_node = elem2node(elem, Jd_elem, nodelen)
+    return Jmua_node, Jd_node
