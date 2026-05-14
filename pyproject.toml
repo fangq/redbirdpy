@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "redbirdpy"
-version = "0.2.1"
+version = "0.3.0"
 description = "A Python toolbox for Diffuse Optical Tomography (DOT) and Near-Infrared Spectroscopy (NIRS)"
 readme = "README.md"
 license = {text = "GPL-3.0"}
