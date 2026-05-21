@@ -26,6 +26,8 @@ __all__ = [
     "multispectral",
     "createinv",
     "regemperical",
+    "jacop",
+    "reglsqr",
 ]
 
 import numpy as np
@@ -165,6 +167,52 @@ def runrecon(
             return_jacobian=True,
             **kwargs,
         )
+
+        # ---- voxel-grid (mcxlab/pmcx) Jacobian: route through LSQR -------
+        # When runforward's mcxlab/pmcx branch returned Jext['mua'] as a 4D
+        # array (Nx, Ny, Nz, Ns*Nd), the Jacobian is too large for the
+        # normal-equation form (J.T @ J would be Nv x Nv).  Use reglsqr
+        # (matrix-free LSQR with optional early stopping) to solve
+        # J*delta_mu = (detphi0 - detphi) directly and write the voxel
+        # update back to cfg.muavol (or stash as cfg.delta_muavol when the
+        # caller's parameterization has no per-voxel field).  Mirrors the
+        # rbrunrecon.m mcxlab dispatch.
+        Jext_mua = Jext.get("mua") if isinstance(Jext, dict) else None
+        if isinstance(Jext_mua, np.ndarray) and Jext_mua.ndim >= 4:
+            rvec = np.asarray(detphi0).ravel() - np.asarray(detphi).ravel()
+            lsqr_maxit = int(kwargs.get("lsqrmaxit", 100))
+            lsqr_tol = float(kwargs.get("lsqrtol", 1e-6))
+            delta_mu_vol, lsqr_info = reglsqr(
+                Jext_mua,
+                rvec,
+                maxit=lsqr_maxit,
+                tol=lsqr_tol,
+            )
+
+            if (
+                isinstance(cfg.get("muavol"), np.ndarray)
+                and cfg["muavol"].shape == delta_mu_vol.shape
+            ):
+                cfg["muavol"] = cfg["muavol"] + delta_mu_vol
+            elif (
+                isinstance(cfg.get("prop"), np.ndarray)
+                and np.asarray(cfg["prop"]).shape[0] == 2
+            ):
+                # single tissue label + outside row: stash as cfg.muavol
+                cfg["muavol"] = delta_mu_vol
+            else:
+                cfg["delta_muavol"] = delta_mu_vol
+
+            resid[iteration] = float(np.linalg.norm(rvec))
+            if report:
+                print(
+                    f"iter [{iteration + 1:4d}] (mcxlab/LSQR): "
+                    f"residual={resid[iteration]:.4e} "
+                    f"relres={lsqr_info['relres']:.4e} "
+                    f"lsqr_iter={lsqr_info['itn']} "
+                    f"(time={time.time() - t_start:.2f}s)"
+                )
+            continue
 
         # Build Jacobians
         wavelengths = [""]
@@ -388,6 +436,168 @@ def runrecon(
     recon["lambda"] = lambda_
 
     return recon, resid, cfg, updates, Jmua, detphi, phi
+
+
+def jacop(J: np.ndarray):
+    """Wrap a 4D voxel-grid Jacobian as a scipy LinearOperator.
+
+    Port of redbird-m/matlab/rbjacop.m.  The 4D Jacobian shape is
+    ``(Nx, Ny, Nz, Nsd)`` where ``Nsd = Ns*Nd`` is the number of
+    source-detector pairs and ``J[..., k]`` is the sensitivity volume for the
+    k-th pair.  We never form the ``Nv x Nv`` Hessian ``J.T @ J``; LSQR only
+    needs the matvec / rmatvec products, so the operator reshapes ``J`` into
+    a 2D ``(Nv, Nsd)`` view once and dispatches:
+
+        matvec(x)  : voxel-space ``x`` (length Nv)  ->  data-space (Nsd,)
+        rmatvec(y) : data-space ``y`` (length Nsd) ->  voxel-space (Nv,)
+
+    Parameters
+    ----------
+    J : ndarray, shape (Nx, Ny, Nz, Nsd)
+        Voxel-grid adjoint Jacobian returned by mcxlab in
+        ``cfg.outputtype = 'adjoint'`` / ``'adjoint_mua_d'`` mode.
+
+    Returns
+    -------
+    op : scipy.sparse.linalg.LinearOperator
+        Shape ``(Nsd, Nv)`` operator with matvec / rmatvec wired to ``J``.
+    """
+    from scipy.sparse.linalg import LinearOperator
+
+    if J.ndim != 4:
+        raise ValueError(f"jacop: J must be a 4D array, got ndim={J.ndim}")
+
+    Nx, Ny, Nz, Nsd = J.shape
+    Nv = Nx * Ny * Nz
+    # reshape on a C-contiguous array is an O(1) view; both matvec and
+    # rmatvec then reduce to a single BLAS GEMV.
+    J2 = J.reshape(Nv, Nsd)
+
+    def matvec(x):
+        return J2.T @ np.asarray(x).ravel()
+
+    def rmatvec(y):
+        return J2 @ np.asarray(y).ravel()
+
+    return LinearOperator(
+        shape=(Nsd, Nv), matvec=matvec, rmatvec=rmatvec, dtype=J.dtype
+    )
+
+
+def reglsqr(
+    J,
+    r: np.ndarray,
+    tol: float = 1e-6,
+    maxit: int = 200,
+    damp: float = 0.0,
+    reshape3d: bool = True,
+    adjointtest: bool = True,
+) -> Tuple[np.ndarray, dict]:
+    """Iterative least-squares solve of ``J * delta_mu = r`` via LSQR.
+
+    Port of redbird-m/matlab/rbreglsqr.m.  Designed for the mcxlab voxel-grid
+    Jacobian where ``J`` is too large for the normal-equation form
+    ``(J^T J + lambda I)^{-1} J^T r`` (``J^T J`` would be ``Nv x Nv`` with
+    ``Nv ~ 1e6 - 1e7`` voxels).  Regularization is by **early stopping** --
+    the Krylov subspace captures dominant singular components first
+    (semi-convergence), so the iteration count itself acts as the
+    regularizer.  Pass ``damp > 0`` for explicit Tikhonov.
+
+    Parameters
+    ----------
+    J : ndarray or scipy.sparse.linalg.LinearOperator
+        Either a 4D Jacobian ``(Nx, Ny, Nz, Nsd)`` (wrapped on the fly via
+        `jacop`) or an existing LinearOperator-like with shape ``(Nsd, Nv)``.
+    r : ndarray, shape (Nsd,)
+        Measurement residual ``y_meas - y_model``.
+    tol : float, optional
+        LSQR convergence tolerance (default 1e-6).
+    maxit : int, optional
+        Max LSQR iterations (default 200).
+    damp : float, optional
+        ``sqrt(lambda)`` for Tikhonov damping (default 0; early stopping
+        provides implicit regularization).  scipy's lsqr exposes ``damp``
+        directly, so unlike the MATLAB port we don't need to build an
+        augmented system manually.
+    reshape3d : bool, optional
+        When ``J`` is a 4D array and this is True, reshape ``delta_mu`` back
+        to ``(Nx, Ny, Nz)`` on return (default True).
+    adjointtest : bool, optional
+        Run a one-shot dot-product test ``<Jv, u>`` vs ``<v, J'u>`` with
+        random ``v``, ``u`` before LSQR.  Catches sign / index-order errors
+        in custom operators.  Warns if the relative error exceeds 1e-4.
+
+    Returns
+    -------
+    delta_mu : ndarray
+        Voxel-space update; shape ``(Nx, Ny, Nz)`` for 4D-array ``J`` (when
+        ``reshape3d``), otherwise the flat ``Nv``-vector.
+    info : dict
+        ``flag``, ``itn``, ``relres``, ``adjoint_err``.
+
+    Notes
+    -----
+    Uses scipy's built-in ``scipy.sparse.linalg.lsqr``.  Hansen, "Discrete
+    Inverse Problems" (SIAM 2010) ch.6-8 covers semi-convergence / early
+    stopping for ill-posed least-squares; Paige & Saunders (1982) is the
+    original LSQR reference.
+    """
+    from scipy.sparse.linalg import lsqr as _lsqr, LinearOperator
+
+    input_was_4d = isinstance(J, np.ndarray) and J.ndim == 4
+    if input_was_4d:
+        sz4 = J.shape
+        op = jacop(J)
+    elif isinstance(J, LinearOperator) or hasattr(J, "matvec"):
+        op = J
+        sz4 = None
+    else:
+        raise TypeError(
+            "reglsqr: J must be a 4D ndarray or a scipy LinearOperator-like"
+        )
+
+    Nsd = int(op.shape[0])
+    Nv = int(op.shape[1])
+
+    adjoint_err = float("nan")
+    if adjointtest:
+        rng = np.random.default_rng()  # don't touch the global RNG state
+        v_probe = rng.standard_normal(Nv)
+        u_probe = rng.standard_normal(Nsd)
+        Jv = op.matvec(v_probe)
+        Jtu = op.rmatvec(u_probe)
+        lhs = float(u_probe @ Jv)
+        rhs = float(Jtu @ v_probe)
+        adjoint_err = abs(lhs - rhs) / max(abs(lhs), np.finfo(float).eps)
+        if adjoint_err > 1e-4:
+            warnings.warn(
+                "reglsqr: adjoint dot-product test failed -- "
+                f"|<Jv,u> - <v,J'u>| / |<u,Jv>| = {adjoint_err:.3e}. "
+                "LSQR may converge to garbage; check the sign / normalization "
+                "of your operator.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    r_flat = np.asarray(r, dtype=float).ravel()
+    if r_flat.size != Nsd:
+        raise ValueError(f"reglsqr: r has length {r_flat.size}, expected Nsd = {Nsd}")
+
+    result = _lsqr(op, r_flat, atol=tol, btol=tol, iter_lim=maxit, damp=damp)
+    x = result[0]
+    info = {
+        "flag": int(result[1]),
+        "itn": int(result[2]),
+        "relres": float(result[3]),
+        "adjoint_err": adjoint_err,
+    }
+
+    if input_was_4d and reshape3d:
+        delta_mu = x.reshape(sz4[0], sz4[1], sz4[2])
+    else:
+        delta_mu = x
+
+    return delta_mu, info
 
 
 def reginv(

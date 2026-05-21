@@ -53,6 +53,14 @@ except ImportError:
     _pmmc = None
     _HAS_PMMC = False
 
+try:
+    import pmcx as _pmcx
+
+    _HAS_PMCX = True
+except ImportError:
+    _pmcx = None
+    _HAS_PMCX = False
+
 # Speed of light in mm/s
 C0 = 299792458000.0
 R_C0 = 1.0 / C0
@@ -90,9 +98,14 @@ def runforward(cfg: dict, **kwargs) -> Tuple[Any, ...]:
     """
     return_jacobian = kwargs.pop("return_jacobian", False)
 
-    # Monte Carlo dispatch (must precede time-domain check; mmc handles its
-    # own time grid).
+    # Monte Carlo dispatch (must precede time-domain check; mc handles its
+    # own time grid).  Three sub-branches:
+    #   - cfg.vol            -> mcxlab/pmcx voxel-grid path (_runforward_mcx)
+    #   - cfg.node + cfg.elem -> mmclab/pmmc mesh-mode path (_runforward_mc)
+    #   - neither             -> fall back to FEM with a warning
     if cfg.get("nphoton") is not None:
+        if cfg.get("vol") is not None:
+            return _runforward_mcx(cfg, return_jacobian=return_jacobian, **kwargs)
         if not _HAS_PMMC:
             warnings.warn(
                 "cfg.nphoton is set but pmmc is not importable; falling back "
@@ -389,6 +402,143 @@ def _runforward_mc(
     if return_jacobian:
         return detval_out, phi_out, Jext
     return detval_out, phi_out
+
+
+def _runforward_mcx(
+    cfg: dict, return_jacobian: bool = False, **kwargs
+) -> Tuple[Any, ...]:
+    """Monte Carlo voxel-grid forward branch (mcxlab/pmcx).
+
+    Port of the cfg.vol mcxlab branch in redbird-m/matlab/rbrunforward.m
+    (~ lines 290-345).  Routes the cfg through ``pmcx`` once.  Returns the
+    voxel-averaged detector readings and, when ``return_jacobian`` is True,
+    the 4D voxel Jacobian ``Jext.mua`` (shape ``(Nx, Ny, Nz, Ns*Nd)``).
+    Downstream consumers (e.g. `runrecon`) detect the 4D shape and route
+    through `reglsqr` instead of the normal-equation Gauss-Newton step.
+    """
+    if not _HAS_PMCX:
+        raise ImportError(
+            "cfg.vol is set but pmcx is not importable; install pmcx to enable "
+            "the voxel-grid Monte Carlo path."
+        )
+
+    if cfg.get("helmholtz") or cfg.get("bulkprop") is not None:
+        raise ValueError(
+            "MWT/Helmholtz forward cannot be combined with the Monte Carlo path."
+        )
+
+    cfg = copy.copy(cfg)
+    if "prop" in cfg:
+        cfg["prop"] = copy.copy(cfg["prop"])
+
+    if cfg.get("tstart") is None:
+        cfg["tstart"] = 0.0
+    if cfg.get("tend") is None:
+        cfg["tend"] = 5e-9
+    if cfg.get("tstep") is None:
+        cfg["tstep"] = cfg["tend"]
+
+    avgsize = float(kwargs.get("avgsize", 1.0))
+
+    srcpos = np.atleast_2d(np.asarray(cfg["srcpos"], dtype=float))
+    detpos = np.atleast_2d(np.asarray(cfg["detpos"], dtype=float))
+    srcnum = srcpos.shape[0]
+    detnum = detpos.shape[0]
+
+    # broadcast srcdir to Nsrc rows (mcxlab/pmcx multi-source parser requires
+    # matching row counts, same convention as mmclab)
+    srcdir = np.atleast_2d(np.asarray(cfg["srcdir"], dtype=float))
+    if srcdir.shape[0] == 1 and srcnum > 1:
+        srcdir = np.tile(srcdir, (srcnum, 1))
+    cfg["srcdir"] = srcdir
+    if srcpos.shape[1] < 4:
+        srcpos = np.hstack([srcpos, np.ones((srcpos.shape[0], 4 - srcpos.shape[1]))])
+    cfg["srcpos"] = srcpos
+
+    need_jacobian = bool(return_jacobian)
+
+    # CW (omega == 0) cannot separate mua and D; ask for the single-output
+    # 'adjoint' kernel (J_mua only), RF uses 'adjoint_mua_d'.
+    omega_val = cfg.get("omega", 0)
+    if isinstance(omega_val, dict):
+        is_rf_mc = any(float(v) > 0 for v in omega_val.values())
+    else:
+        is_rf_mc = float(omega_val) > 0 if omega_val is not None else False
+
+    if need_jacobian:
+        detdir = cfg.get("detdir")
+        if detdir is None or len(np.asarray(detdir)) == 0:
+            from .utility import getdetdir_vol
+
+            cfg["detdir"] = getdetdir_vol(cfg)
+        cfg["detdir"] = np.atleast_2d(np.asarray(cfg["detdir"], dtype=float))
+        if cfg["detdir"].shape[1] < 4:
+            pad = np.zeros((cfg["detdir"].shape[0], 4 - cfg["detdir"].shape[1]))
+            cfg["detdir"] = np.hstack([cfg["detdir"], pad])
+        cfg["srcid"] = -1
+        cfg["outputtype"] = "adjoint_mua_d" if is_rf_mc else "adjoint"
+    elif cfg.get("detdir") is not None and len(np.asarray(cfg["detdir"])) > 0:
+        cfg["detdir"] = np.atleast_2d(np.asarray(cfg["detdir"], dtype=float))
+        if cfg["detdir"].shape[1] < 4:
+            pad = np.zeros((cfg["detdir"].shape[0], 4 - cfg["detdir"].shape[1]))
+            cfg["detdir"] = np.hstack([cfg["detdir"], pad])
+        cfg["srcid"] = -2
+        cfg["outputtype"] = "fluence"
+    else:
+        cfg["srcid"] = -1
+        cfg["outputtype"] = "fluence"
+
+    cfg.pop("srcdata", None)
+    cfg.pop("extrasrclen", None)
+
+    out = _pmcx.run(cfg)
+
+    # mcxlab raw flux layout: (Nx, Ny, Nz, Nt, Nsrc+Ndet) or with a singleton
+    # time axis squeezed.  Take time-bin 0 (CW).
+    phi = np.asarray(out["flux"])
+    if phi.ndim == 5:
+        phi = phi[:, :, :, 0, :]
+    elif phi.ndim == 4 and phi.shape[3] == 1:
+        phi = phi[:, :, :, 0]
+        phi = phi[..., None]
+
+    # detphi[d, s] = average forward fluence at detector d for source s
+    # (centered voxel block of half-width `avgsize` mm).
+    detphi = np.full((detnum, srcnum), np.nan)
+    for s in range(srcnum):
+        for d in range(detnum):
+            detphi[d, s] = _voxelmean(phi[..., s], detpos[d, :3], avgsize)
+
+    Jext = None
+    if need_jacobian:
+        Jext = {"mua": np.asarray(out["jmua"], dtype=float)}
+        if "jd" in out and out["jd"] is not None:
+            Jext["dcoeff"] = np.asarray(out["jd"], dtype=float)
+
+    if return_jacobian:
+        return detphi, phi, Jext
+    return detphi, phi
+
+
+def _voxelmean(vol: np.ndarray, pos: np.ndarray, avgsize: float) -> float:
+    """Mean of a voxel-grid scalar field over a (2*r+1)^3 block centered at pos.
+
+    Port of redbird-m/matlab/rbvoxelmean.m: clamp the block to the grid bounds
+    and return the arithmetic mean.  Used to convert a 3D fluence volume into
+    a single detector reading.
+    """
+    Nx, Ny, Nz = vol.shape
+    r = max(int(round(avgsize)), 0)
+    cx = min(max(int(round(pos[0])), 1), Nx)
+    cy = min(max(int(round(pos[1])), 1), Ny)
+    cz = min(max(int(round(pos[2])), 1), Nz)
+    x0, x1 = max(cx - r, 1), min(cx + r, Nx)
+    y0, y1 = max(cy - r, 1), min(cy + r, Ny)
+    z0, z1 = max(cz - r, 1), min(cz + r, Nz)
+    block = vol[x0 - 1 : x1, y0 - 1 : y1, z0 - 1 : z1]
+    if block.size == 0:
+        return float("nan")
+    return float(np.mean(block))
 
 
 def _tsearchn_bary(

@@ -16,6 +16,8 @@ __all__ = [
     "getdistance",
     "getltr",
     "getreff",
+    "getdetdir",
+    "getdetdir_vol",
     "elem2node",
     "addnoise",
     "meshinterp",
@@ -1172,6 +1174,96 @@ def getdetdir(cfg: dict) -> np.ndarray:
         d2 = np.sum(delta * delta, axis=1)
         fid = int(np.argmin(d2))
         detdir[d, :3] = -facenrm[fid]
+
+    return detdir
+
+
+def getdetdir_vol(cfg: dict) -> np.ndarray:
+    """Estimate inward surface-normal directions at detector positions on a
+    voxel-grid (cfg.vol) domain.
+
+    Port of redbird-m/matlab/rbgetdetdir_vol.m.  Used by the mcxlab branch of
+    `_runforward_mcx` when the user requests a Jacobian but hasn't supplied
+    ``cfg.detdir``: mcxlab needs (Nd, 4) inward-normal + focal-length entries
+    to build detector-as-adjoint disk sources.
+
+    For each detector, the inward direction is estimated from the binary
+    indicator (cfg.vol > 0) sampled in a small neighborhood: each in-domain
+    voxel pulls the detector toward it, each out-of-domain voxel pushes it
+    away.  Falls back to a domain-centroid heuristic when the detector sits
+    deep inside the volume and the gradient is degenerate.
+
+    Parameters
+    ----------
+    cfg : dict
+        Must contain ``cfg.vol`` (Nx, Ny, Nz; or (Nprop, Nx, Ny, Nz) for
+        mcxlab's per-voxel-property modes) and ``cfg.detpos`` (Nd, 3 or 4).
+        Optional: ``cfg.unitinmm`` (default 1.0), ``cfg.detdirhw`` (integer
+        neighborhood half-width, default 3 voxels).
+
+    Returns
+    -------
+    detdir : ndarray, shape (Nd, 4)
+        Columns 0..2 = unit inward-normal; column 3 = focal-length placeholder (0).
+    """
+    if "vol" not in cfg or "detpos" not in cfg:
+        raise ValueError("getdetdir_vol requires cfg['vol'] and cfg['detpos']")
+
+    vol = np.asarray(cfg["vol"])
+    # mcxlab per-voxel-property modes pass cfg.vol as 4D (Nprop, Nx, Ny, Nz);
+    # collapse the property axis for the inside-domain mask.
+    if vol.ndim == 4:
+        vol = np.any(vol > 0, axis=0)
+    inside = vol > 0
+
+    detpos = np.atleast_2d(np.asarray(cfg["detpos"], dtype=float))
+    unitinmm = float(cfg.get("unitinmm", 1.0)) or 1.0
+    hw = max(1, int(round(cfg.get("detdirhw", 3) or 3)))
+
+    Nx, Ny, Nz = inside.shape
+    detnum = detpos.shape[0]
+    detdir = np.zeros((detnum, 4))
+
+    # 1-based grid coordinates to match mcxlab's voxel convention. A one-voxel
+    # offset doesn't affect the unit direction we're computing.
+    for d in range(detnum):
+        cx = min(max(int(round(detpos[d, 0] / unitinmm)), 1), Nx)
+        cy = min(max(int(round(detpos[d, 1] / unitinmm)), 1), Ny)
+        cz = min(max(int(round(detpos[d, 2] / unitinmm)), 1), Nz)
+
+        x0, x1 = max(cx - hw, 1), min(cx + hw, Nx)
+        y0, y1 = max(cy - hw, 1), min(cy + hw, Ny)
+        z0, z1 = max(cz - hw, 1), min(cz + hw, Nz)
+
+        # convert 1-based bounds to 0-based slicing
+        block = inside[x0 - 1 : x1, y0 - 1 : y1, z0 - 1 : z1].astype(float)
+        bx, by, bz = np.meshgrid(
+            np.arange(x0, x1 + 1),
+            np.arange(y0, y1 + 1),
+            np.arange(z0, z1 + 1),
+            indexing="ij",
+        )
+        dx = bx - cx
+        dy = by - cy
+        dz = bz - cz
+        rmag = np.sqrt(dx * dx + dy * dy + dz * dz)
+        rmag[rmag == 0] = 1.0  # skip self
+        w = (2.0 * block - 1.0) / rmag
+
+        nrm_x = float(np.sum(dx * w))
+        nrm_y = float(np.sum(dy * w))
+        nrm_z = float(np.sum(dz * w))
+        nlen = float(np.sqrt(nrm_x * nrm_x + nrm_y * nrm_y + nrm_z * nrm_z))
+
+        if nlen < 1e-12:
+            # fall back to centroid heuristic
+            v = np.array(
+                [(Nx + 1) / 2.0 - cx, (Ny + 1) / 2.0 - cy, (Nz + 1) / 2.0 - cz]
+            )
+            nlen2 = max(float(np.linalg.norm(v)), 1e-12)
+            detdir[d, :3] = v / nlen2
+        else:
+            detdir[d, :3] = np.array([nrm_x, nrm_y, nrm_z]) / nlen
 
     return detdir
 
