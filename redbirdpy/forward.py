@@ -214,9 +214,28 @@ def _runforward_mc(
     cfg["method"] = "elem"
     cfg["basisorder"] = 1
     if "seg" in cfg and "elemprop" not in cfg:
-        cfg["elemprop"] = np.asarray(cfg["seg"]).astype(np.int32).ravel()
+        # Per-element seg: use directly. Per-node seg (or any other size) would
+        # corrupt mmclab's mesh.ne = numel(elemprop) heuristic, so fall back to
+        # a single tissue label; the per-node DOT property mode below routes
+        # per-node mua/musp via cfg.nodemua / cfg.nodemusp instead.
+        seg = np.asarray(cfg["seg"]).ravel()
+        n_elem = int(np.asarray(cfg["elem"]).shape[0])
+        if seg.size == n_elem:
+            cfg["elemprop"] = seg.astype(np.int32)
+        else:
+            cfg["elemprop"] = np.ones(n_elem, dtype=np.int32)
 
     need_jacobian = bool(return_jacobian)
+
+    # CW (omega == 0) cannot separate mua and D from a single measurement set,
+    # so request the single-output 'adjoint' kernel (J_mua only); RF (omega>0)
+    # uses 'adjoint_mua_d' to also compute J_D. Mirrors the FEM/rbjac branch
+    # which only builds Jd when any(omegas) > 0.
+    omega_val = cfg.get("omega", 0)
+    if isinstance(omega_val, dict):
+        is_rf_mc = any(float(v) > 0 for v in omega_val.values())
+    else:
+        is_rf_mc = float(omega_val) > 0 if omega_val is not None else False
 
     if need_jacobian:
         # require cfg.detdir; build it if missing
@@ -228,7 +247,7 @@ def _runforward_mc(
             pad = np.zeros((cfg["detdir"].shape[0], 4 - cfg["detdir"].shape[1]))
             cfg["detdir"] = np.hstack([cfg["detdir"], pad])
         cfg["srcid"] = -1
-        cfg["outputtype"] = "adjoint_mua_d"
+        cfg["outputtype"] = "adjoint_mua_d" if is_rf_mc else "adjoint"
     elif cfg.get("detdir") is not None and len(np.asarray(cfg["detdir"])) > 0:
         # forward-only but user wants detector slots too
         cfg["detdir"] = np.atleast_2d(np.asarray(cfg["detdir"], dtype=float))
@@ -266,6 +285,15 @@ def _runforward_mc(
     if srcdir.shape[0] == 1 and srcnum > 1:
         srcdir = np.tile(srcdir, (srcnum, 1))
     cfg["srcdir"] = srcdir
+
+    # mmclab.cpp populates srcdata via calloc (zero-initialized) then copies
+    # arraydim[1] columns from cfg.srcpos. With only 3 columns the per-photon
+    # weight srcdata.srcpos.w stays at 0 and every photon launches with weight
+    # zero ("total simulated energy: 0.00"). Pad the 4th column with weight=1
+    # so multi-source MC launches actually carry energy.
+    if srcpos.shape[1] < 4:
+        weight_col = np.ones((srcpos.shape[0], 4 - srcpos.shape[1]))
+        srcpos = np.hstack([srcpos, weight_col])
     cfg["srcpos"] = srcpos
 
     for wv in wavelengths:
@@ -336,19 +364,23 @@ def _runforward_mc(
                 # mmclab/pmmc-native orientation: (Nn, Ns*Nd). Downstream
                 # consumers (e.g. runrecon's MC branch) transpose only when
                 # they need the (Nsd, Nn) layout used by the FEM jac() path.
+                # CW mode (outputtype='adjoint') skips J_D, so out['jd'] is
+                # absent; only RF (outputtype='adjoint_mua_d') populates it.
                 Jmua_map[wv] = np.asarray(out["jmua"], dtype=float)
-                Jd_map[wv] = np.asarray(out["jd"], dtype=float)
+                if "jd" in out and out["jd"] is not None:
+                    Jd_map[wv] = np.asarray(out["jd"], dtype=float)
         else:
             phi_out = phi_wv
             detval_out = detphi_wv
             if need_jacobian:
-                Jext_single = {
-                    "mua": np.asarray(out["jmua"], dtype=float),
-                    "dcoeff": np.asarray(out["jd"], dtype=float),
-                }
+                Jext_single = {"mua": np.asarray(out["jmua"], dtype=float)}
+                if "jd" in out and out["jd"] is not None:
+                    Jext_single["dcoeff"] = np.asarray(out["jd"], dtype=float)
 
     if is_multi_wv and need_jacobian:
-        Jext = {"mua": Jmua_map, "dcoeff": Jd_map}
+        Jext = {"mua": Jmua_map}
+        if Jd_map:
+            Jext["dcoeff"] = Jd_map
     elif need_jacobian:
         Jext = Jext_single
     else:

@@ -1036,17 +1036,23 @@ def getoptodes(
     widesrc = cfg.get("widesrc", None)
     widedet = cfg.get("widedet", None)
 
+    # Use explicit column slicing srcpos[:, :3] / detpos[:, :3] so a 4th
+    # column (per-source weight, used by the MC path -- see _runforward_mc)
+    # doesn't broadcast through the displacement step. Mirrors the redbird-m
+    # rbgetoptodes.m fix for matching Nsrc-by-3 srcpos layouts.
     if "srcpos" in cfg and cfg["srcpos"] is not None and cfg["srcpos"].size > 0:
-        srcdir = cfg["srcdir"]
-        if srcdir.shape[0] == 1:
-            srcdir = np.tile(srcdir, (cfg["srcpos"].shape[0], 1))
-        pointsrc = cfg["srcpos"] + srcdir * ltr
+        srcpos = np.atleast_2d(np.asarray(cfg["srcpos"]))
+        srcdir = np.atleast_2d(np.asarray(cfg["srcdir"]))
+        if srcdir.shape[0] == 1 and srcpos.shape[0] > 1:
+            srcdir = np.tile(srcdir, (srcpos.shape[0], 1))
+        pointsrc = srcpos[:, :3] + srcdir[:, :3] * ltr
 
     if "detpos" in cfg and cfg["detpos"] is not None and cfg["detpos"].size > 0:
-        detdir = cfg.get("detdir", cfg["srcdir"])
-        if detdir.shape[0] == 1:
-            detdir = np.tile(detdir, (cfg["detpos"].shape[0], 1))
-        pointdet = cfg["detpos"] + detdir * ltr
+        detpos = np.atleast_2d(np.asarray(cfg["detpos"]))
+        detdir = np.atleast_2d(np.asarray(cfg.get("detdir", cfg["srcdir"])))
+        if detdir.shape[0] == 1 and detpos.shape[0] > 1:
+            detdir = np.tile(detdir, (detpos.shape[0], 1))
+        pointdet = detpos[:, :3] + detdir[:, :3] * ltr
 
     return pointsrc, pointdet, widesrc, widedet
 

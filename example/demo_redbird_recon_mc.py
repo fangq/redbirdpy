@@ -133,20 +133,45 @@ def main():
         "lambda": 1e-4,
     }
 
-    # initialize to homogeneous background
-    recon["prop"] = np.tile(cfg["prop"][1, :], (recon_node.shape[0], 1))
-    # per-node prop for the forward mesh (engages mmc's per-node prop kernel)
-    cfg["prop"] = np.tile(cfg["prop"][1, :], (cfg["node"].shape[0], 1))
+    # ----------------------------------------------------------------
+    # Stage 1: bulk mua/musp fit (single segment)
+    # ----------------------------------------------------------------
+    # Start from a deliberately poor initial guess. rb.run(mode='bulk') sets
+    # recon.seg = ones(Nnode), collapsing the Jacobian columns into a single
+    # per-segment unknown. Each Gauss-Newton step adjusts one global mua so
+    # we get a fast sanity check on the MC forward+adjoint before per-node
+    # imaging starts. Mirrors demo_redbird_recon_mc.m in redbird-m.
     cfg.pop("seg", None)
+    recon["bulk"] = {"mua": 0.003, "musp": 0.6}
 
-    # ----------------------------------------------------------------
-    # Streamlined MC-based reconstruction
-    # ----------------------------------------------------------------
-    print("\nRunning MC-based reconstruction (5 Gauss-Newton iterations) ...")
+    print("\n=== Stage 1: bulk mua/musp fit ===")
     import time
 
     t0 = time.time()
-    out = rb.recon.runrecon(cfg, recon, detphi0, sd, maxiter=5, lambda_=1e-4)
+    newrecon = rb.run(cfg, recon, detphi0, sd, mode="bulk", lambda_=1e-3, maxiter=5)[0]
+    print(f"  done in {time.time() - t0:.1f} s")
+    print(
+        f"  bulk fit: mua = {newrecon['prop'][1, 0]:g}, "
+        f"musp = {newrecon['prop'][1, 1]:g}"
+    )
+
+    # ----------------------------------------------------------------
+    # Stage 2: per-node image recon seeded with stage-1 bulk
+    # ----------------------------------------------------------------
+    # Re-seed recon.bulk from the stage-1 fit and let rb.run(mode='image')
+    # rebuild per-node recon.prop and cfg.prop from those bulk values.
+    # Per-node cfg.prop is auto-detected by _runforward_mc and split into
+    # cfg.nodemua/cfg.nodemusp for the mmc per-node kernel; runrecon picks
+    # up the Jacobian from runforward's Jext return and skips the FEM jac().
+    recon["bulk"] = {
+        "mua": float(newrecon["prop"][1, 0]),
+        "musp": float(newrecon["prop"][1, 1]),
+    }
+    recon.pop("prop", None)  # let _apply_run_mode rebuild per-node from new bulk
+
+    print("\n=== Stage 2: per-node image reconstruction ===")
+    t0 = time.time()
+    out = rb.run(cfg, recon, detphi0, sd, mode="image", lambda_=1e-4, maxiter=5)
     newrecon, resid, newcfg = out[:3]
     print(f"  done in {time.time() - t0:.1f} s")
     print(f"  residual trajectory: {resid}")

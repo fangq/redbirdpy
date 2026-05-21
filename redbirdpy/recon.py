@@ -189,9 +189,18 @@ def runrecon(
                 # single-wavelength: jmua_src is a 2D array
                 Jmua["mua"] = np.asarray(jmua_src).T
 
-            # Note: Jext["dcoeff"] is currently not consumed by the inversion
-            # loop (D-coefficient recon requires extending Jmua's dict shape;
-            # not in scope for the initial MC integration).
+            # Jext["dcoeff"] consumption is RF-only: CW (omega == 0) cannot
+            # separate mua and D from a single measurement set, so the FEM
+            # branch guards Jd on (any(omegas) > 0) and we mirror that here.
+            # Note: even on RF, dcoeff is not currently routed into Jmua's
+            # dict shape -- D-coefficient image recon needs a wider refactor.
+            omegas_r = cfg.get("omega", 0)
+            if isinstance(omegas_r, dict):
+                _is_rf = any(float(v) > 0 for v in omegas_r.values())
+            else:
+                _is_rf = float(omegas_r) > 0 if omegas_r is not None else False
+            if _is_rf and "dcoeff" in Jext:
+                pass  # placeholder for future D-coefficient recon hook
         else:
             for wv in wavelengths:
                 sdwv = sd.get(wv, sd) if isinstance(sd, dict) else sd
