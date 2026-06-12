@@ -4,7 +4,7 @@
 
 * **Copyright**: (C) Qianqian Fang (2005–2026) \<q.fang at neu.edu>
 * **License**: GNU Public License V3 or later
-* **Version**: 0.2.1 (Flamingo)
+* **Version**: 0.3.1 (Summer Tanagers)
 * **GitHub**: [https://github.com/fangq/redbirdpy](https://github.com/fangq/redbirdpy)
 * **Acknowledgement**: This project is supported by the US National Institute of Health (NIH)
   grant [R01-CA204443](https://reporter.nih.gov/project-details/10982160)

@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name="redbirdpy",
     packages=find_packages(exclude=["test", "test.*"]),
-    version="0.3.0",
+    version="0.3.1",
     license="GPL-3.0",
     description="A Python toolbox for Diffuse Optical Tomography (DOT) and Near-Infrared Spectroscopy (NIRS)",
     long_description=readme,
