@@ -168,6 +168,19 @@ def runrecon(
             **kwargs,
         )
 
+        # ratiometric (fNIRS) data support: when recon["isratio"] is set, the
+        # measured detphi0 holds the ratio I/I0 (= exp(-dOD)); on the first
+        # iteration convert it to pseudo-absolute by scaling with the model
+        # baseline detphi, so the misfit detphi0 - detphi works in absolute
+        # terms (port of redbird-m/matlab/rbrunrecon.m recon.isratio block).
+        if iteration == 0 and isinstance(recon, dict) and recon.get("isratio"):
+            if isinstance(detphi0, dict):
+                for wv in list(detphi0.keys()):
+                    model = detphi[wv] if wv in detphi else detphi[float(wv)]
+                    detphi0[wv] = np.asarray(detphi0[wv]) * np.asarray(model)
+            else:
+                detphi0 = np.asarray(detphi0) * np.asarray(detphi)
+
         # ---- voxel-grid (mcxlab/pmcx) Jacobian: route through LSQR -------
         # When runforward's mcxlab/pmcx branch returned Jext['mua'] as a 4D
         # array (Nx, Ny, Nz, Ns*Nd), the Jacobian is too large for the
