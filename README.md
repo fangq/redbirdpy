@@ -4,8 +4,9 @@
 
 * **Copyright**: (C) Qianqian Fang (2005–2026) \<q.fang at neu.edu>
 * **License**: GNU Public License V3 or later
-* **Version**: 0.3.1 (Summer Tanagers)
+* **Version**: 0.4.1 (Summer Tanagers)
 * **GitHub**: [https://github.com/fangq/redbirdpy](https://github.com/fangq/redbirdpy)
+* **PyPI**: [https://pypi.org/project/redbirdpy](https://pypi.org/project/redbirdpy)
 * **Acknowledgement**: This project is supported by the US National Institute of Health (NIH)
   grant [R01-CA204443](https://reporter.nih.gov/project-details/10982160)
 
@@ -23,6 +24,10 @@
   - [Reconstruction Structure `recon`](#reconstruction-structure-recon)
 - [Wide-Field Sources and Detectors](#wide-field-sources-and-detectors)
 - [Multi-Spectral Simulations](#multi-spectral-simulations)
+- [Monte Carlo Forward Solvers (MCX/MMC)](#monte-carlo-forward-solvers-mcxmmc)
+- [Microwave Tomography (MWT)](#microwave-tomography-mwt)
+- [Time-Domain DOT](#time-domain-dot)
+- [Ratiometric (fNIRS) Reconstruction](#ratiometric-fnirs-reconstruction)
 - [Examples](#examples)
 - [Units](#units)
 - [Running Tests](#running-tests)
@@ -33,23 +38,27 @@
 
 ## Introduction
 
-**RedbirdPy** is a Python translation of the [Redbird MATLAB toolbox](https://github.com/fangq/redbird) for diffuse optical imaging (DOI) and diffuse optical tomography (DOT). It provides a fast, experimentally-validated forward solver for the diffusion equation using the finite-element method (FEM), along with advanced non-linear image reconstruction algorithms.
+**RedbirdPy** is a Python translation of the [Redbird MATLAB toolbox](https://github.com/fangq/redbird) for diffuse optical imaging (DOI) and diffuse optical tomography (DOT). It provides a fast, experimentally-validated forward solver for the diffusion equation using the finite-element method (FEM), along with advanced non-linear image reconstruction algorithms. Beyond diffuse optics, RedbirdPy now also supports **microwave tomography (MWT)** through a vector/scalar Helmholtz forward solver, and can interface with the **Monte Carlo** photon transport engines **MCX/pmcx** and **MMC/pmmc** as alternative forward/adjoint solvers feeding the same reconstruction pipeline.
 
 Redbird is the result of over two decades of active research in DOT and image reconstruction. It has been the core data analysis tool in numerous publications related to optical breast imaging, prior-guided reconstruction techniques, multi-modal imaging, and wide-field DOT systems.
 
 ### Key Features
 
 - **Forward Modeling**: Solve the diffusion equation for photon fluence using FEM
-- **Inverse Reconstruction**: Iterative Gauss-Newton with Tikhonov regularization
+- **Monte Carlo Forward/Adjoint**: Drop-in `pmcx` (voxel-grid) and `pmmc` (mesh) Monte Carlo solvers with replay-based adjoint Jacobians, routed through the same API
+- **Microwave Tomography (MWT)**: FEM Helmholtz solver with a first-order Bayliss-Turkel radiating boundary condition for permittivity/conductivity reconstruction
+- **Inverse Reconstruction**: Iterative Gauss-Newton with Tikhonov regularization, plus a matrix-free LSQR path for large voxel-grid problems
+- **Continuous-Wave, Frequency-Domain, and Time-Domain**: CW, amplitude-modulated (RF), and Crank-Nicolson time-domain (TPSF) forward solvers
+- **Ratiometric / fNIRS Data**: Reconstruct from relative (I/I₀) measurements via `recon['isratio']`
 - **Wide-Field Sources/Detectors**: Support for planar, pattern, and Fourier-basis illumination
 - **Multi-Spectral Analysis**: Wavelength-dependent simulations for chromophore estimation
-- **Frequency-Domain**: Support for amplitude-modulated light sources
 - **Dual-Mesh Reconstruction**: Use coarse mesh for faster inverse solving
 - **Structure Priors**: Laplacian, Helmholtz, and compositional priors
+- **Parallel Linear Solvers**: Multiple direct and iterative backends with `multiprocessing`-based multi-RHS solving
 
 ### Validation
 
-The forward solver is carefully validated against Monte Carlo solvers - **MCX** and **MMC**. The diffusion approximation is valid in high-scattering media where the reduced scattering coefficient (μs') is much greater than the absorption coefficient (μa).
+The FEM forward solver is carefully validated against Monte Carlo solvers - **MCX** and **MMC**. The diffusion approximation is valid in high-scattering media where the reduced scattering coefficient (μs') is much greater than the absorption coefficient (μa). When the diffusion approximation is insufficient (e.g. near sources, in low-scattering regions, or voids), the integrated Monte Carlo forward/adjoint solvers can be used in place of the FEM solver without changing the reconstruction code.
 
 ---
 
@@ -74,6 +83,10 @@ pip install iso2mesh  # or from https://github.com/NeuroJSON/pyiso2mesh
 ```bash
 # For accelerated Jacobian computation
 pip install numba          # JIT compilation
+
+# For Monte Carlo forward/adjoint solvers
+pip install pmcx           # MCX voxel-grid Monte Carlo (GPU)
+pip install pmmc           # MMC mesh-based Monte Carlo (GPU)
 
 # For accelerated solvers
 pip install blocksolver  # or from https://github.com/fangq/blit
@@ -161,12 +174,16 @@ Redbird supports four types of image reconstructions:
 
 | Function | Description |
 |----------|-------------|
-| `runforward(cfg)` | Main forward solver for all sources/wavelengths |
-| `femlhs(cfg, deldotdel, wv)` | Build FEM stiffness matrix (LHS) |
+| `runforward(cfg, return_jacobian=False)` | Main forward solver; auto-dispatches to FEM, Monte Carlo (`cfg['nphoton']`), time-domain (`cfg['tstart/tstep/tend']`), or MWT (`cfg['bulk']['epsilon/sigma']`) |
+| `runtd(cfg, theta=0.5, ...)` | Time-domain DOT solver (theta-method / Crank-Nicolson) |
+| `femlhs(cfg, deldotdel, wv, mode)` | Build FEM system matrix (diffusion, Helmholtz, or mass matrix) |
 | `femrhs(cfg, sd, wv)` | Build right-hand-side vectors |
 | `femgetdet(phi, cfg, rhs)` | Extract detector values |
 | `jac(sd, phi, ...)` | Build Jacobian matrices for mua |
 | `jacchrome(Jmua, chromes)` | Build chromophore Jacobians |
+| `jacepssigma(Jmua, omegas)` | Chain mua-Jacobian to permittivity/conductivity Jacobians (MWT) |
+| `jacmus / jacscat / jacscatamp / jacscatpow` | Scattering-property Jacobians |
+| `jacnode(Jelem, ...)` | Convert element-based Jacobian to node-based |
 
 ### `redbirdpy.recon` - Reconstruction
 
@@ -176,7 +193,11 @@ Redbird supports four types of image reconstructions:
 | `reginv(A, b, lambda)` | Regularized inversion (auto-selects method) |
 | `reginvover(A, b, lambda)` | Overdetermined system solver |
 | `reginvunder(A, b, lambda)` | Underdetermined system solver |
+| `reglsqr(J, r, maxit, tol)` | Matrix-free LSQR for large voxel-grid Jacobians |
+| `jacop(J)` | Wrap a 4-D voxel-grid Jacobian as a SciPy `LinearOperator` |
 | `matreform(A, ymeas, ymodel, form)` | Matrix reformulation (real/complex/logphase) |
+| `multispectral(...)` | Assemble multi-wavelength data into a single linear system |
+| `createinv(...)` | Reformulate the inverse problem (complex/real/log-phase) |
 | `prior(seg, type)` | Structure-prior regularization matrices |
 | `syncprop(cfg, recon)` | Synchronize properties between meshes |
 
@@ -191,6 +212,8 @@ Redbird supports four types of image reconstructions:
 | `getdistance(src, det)` | Compute source-detector distances |
 | `getreff(n_in, n_out)` | Effective reflection coefficient |
 | `getltr(cfg)` | Transport mean-free path |
+| `getdetdir(cfg)` | Estimate inward detector normals on a surface mesh (MC) |
+| `getdetdir_vol(cfg)` | Estimate inward detector normals on a voxel grid (MC) |
 | `addnoise(data, snr)` | Add simulated shot/thermal noise |
 | `elem2node(elem, val)` | Element to node interpolation |
 | `meshinterp(...)` | Interpolate between meshes |
@@ -261,8 +284,12 @@ The forward solver uses a dictionary with the following fields:
 | `detparam1` | (4,) float | Wide-field detector parameter 1 |
 | `detparam2` | (4,) float | Wide-field detector parameter 2 |
 | `detpattern` | array | Pattern detector data |
-| `bulk` | dict | Background property values |
-| `param` | dict | Chromophore concentrations |
+| `bulk` | dict | Background property values (`mua`/`musp`/`n`, or `epsilon`/`sigma` for MWT) |
+| `param` | dict | Chromophore concentrations (or `epsilon`/`sigma` parameters for MWT) |
+| `nphoton` | int | Photon count; **its presence routes the run to the Monte Carlo solver** |
+| `vol` | (Nx,Ny,Nz) uint8 | Voxel-label volume; selects the `pmcx` voxel-grid MC path |
+| `gpuid` | int | GPU device id for MC solvers |
+| `tstart`, `tstep`, `tend` | float | Time-domain gate (s); their presence triggers the Crank-Nicolson solver |
 
 #### Auto-Computed Fields (via `meshprep`)
 
@@ -288,6 +315,7 @@ The forward solver uses a dictionary with the following fields:
 | `mapid` | (Nn, ) float | Forward-to-recon mesh mapping (element IDs) |
 | `mapweight` | (Nn, 4) float | Barycentric interpolation weights |
 | `seg` | array | Segmentation labels for priors |
+| `isratio` | bool | Treat `data` as ratiometric (I/I₀) measurements, e.g. fNIRS |
 
 ---
 
@@ -369,6 +397,131 @@ cfg['param'] = {
 | `water` | fraction | Water content |
 | `lipids` | fraction | Lipid content |
 | `aa3` | μM | Cytochrome c oxidase |
+
+---
+
+## Monte Carlo Forward Solvers (MCX/MMC)
+
+In addition to the built-in FEM diffusion solver, RedbirdPy can use the GPU-accelerated Monte Carlo photon transport engines [**MCX/pmcx**](https://github.com/fangq/mcx) and [**MMC/pmmc**](https://github.com/fangq/mmc) as the forward solver. This is useful where the diffusion approximation breaks down (near sources, low-scattering regions, voids). The MC solver plugs into the same `runforward`/`runrecon` API, and an **adjoint (replay-based) Jacobian** is returned for reconstruction.
+
+### Selecting the Monte Carlo solver
+
+Simply add `cfg['nphoton']` to a configuration. Its presence routes the run through Monte Carlo instead of FEM:
+
+| `cfg` fields present | Solver used | Engine |
+|----------------------|-------------|--------|
+| `nphoton`, plus `node`/`elem` | Mesh-based MC | `pmmc` (MMC) |
+| `nphoton`, plus `vol` | Voxel-grid MC | `pmcx` (MCX) |
+
+```python
+# Mesh-based Monte Carlo forward (pmmc)
+cfg, sd = rb.meshprep(cfg)        # standard DOT cfg (node/elem/srcpos/detpos/prop)
+cfg['nphoton'] = int(1e7)         # presence of nphoton -> MC branch
+cfg['gpuid']   = 1
+detphi, phi = rb.run(cfg)
+```
+
+### Adjoint Jacobians for reconstruction
+
+Pass `return_jacobian=True` to obtain the adjoint Jacobian directly from the MC engine (computed via replay), bypassing the FEM `jac()` build:
+
+```python
+detphi, phi, Jext = rb.runforward(cfg, return_jacobian=True)
+# pmmc (mesh):  Jext['mua'] has shape (Nnode, Nsrc*Ndet)
+# pmcx (voxel): Jext['mua'] has shape (Nx, Ny, Nz, Nsrc*Ndet)
+```
+
+`runrecon` automatically detects an MC-supplied Jacobian and consumes it in place of the FEM Jacobian. Detector directions (`cfg['detdir']`) are auto-filled from the surface mesh (`getdetdir`) or voxel grid (`getdetdir_vol`) when missing. In CW mode only the mua Jacobian is available; in RF mode (`omega > 0`) both mua and D Jacobians are computed.
+
+### Matrix-free LSQR for voxel-grid problems
+
+Voxel-grid (`pmcx`) reconstructions can have millions of unknowns, making the normal equations `JᵀJ` intractable. RedbirdPy provides a **matrix-free LSQR** path that wraps the 4-D Jacobian as a SciPy `LinearOperator` and solves with early stopping as implicit regularization:
+
+```python
+detphi, phi, Jext = rb.runforward(cfg, return_jacobian=True)   # cfg has 'vol'
+misfit = ymeas - np.asarray(detphi).ravel()
+delta_mua, info = rb.reglsqr(Jext['mua'], misfit, maxit=100, tol=1e-6)
+```
+
+See `example/demo_redbird_forward_mc.py`, `demo_redbird_jacobian_mc.py`, `demo_redbird_recon_mc.py`, and `demo_redbird_recon_mcx.py`.
+
+---
+
+## Microwave Tomography (MWT)
+
+RedbirdPy includes a FEM **Helmholtz** forward solver with a first-order **Bayliss-Turkel radiating boundary condition (RBC)**, enabling microwave (and, more generally, scalar wave) tomography of complex permittivity. The reconstruction recovers relative permittivity (`epsilon`) and conductivity (`sigma`).
+
+### Triggering MWT mode
+
+MWT is detected automatically when `cfg['bulk']` carries `epsilon` and/or `sigma`. The optical-property table is reinterpreted with columns `[epsilon_r, sigma, mu0, n]` (in place of `[mua, musp, g, n]`), and `cfg['omega']` is the angular frequency (rad/s) of the field.
+
+```python
+import numpy as np
+MU0 = 4 * np.pi * 1e-10   # permeability (H/mm)
+
+cfg = {
+    'node': node, 'elem': elem,
+    'seg':  seg,                       # element labels
+    # bulk with epsilon/sigma -> Helmholtz (MWT) solver
+    'bulk': {'epsilon': 78.0, 'sigma': 1e-3, 'n': np.sqrt(78.0)},
+    # property columns become [epsilon_r, sigma, mu0, n]
+    'prop': {'5e8': np.array([[ 1, 0,      MU0, 1],     # background
+                              [40, 0.5e-3, MU0, 2]])},  # target
+    # line antennas use 6-column [x0 y0 z0 x1 y1 z1] src/det rows
+    'srcpos': np.array([[20, 20, 0, 20, 20, 40]]),
+    'detpos': np.array([[10, 10, 0, 10, 10, 40]]),
+    'omega':  2 * np.pi * 5e8,         # 500 MHz
+}
+
+cfg, sd = rb.meshprep(cfg)             # precomputes RBC geometry
+detphi, phi = rb.run(cfg)              # complex-valued field
+```
+
+`meshprep` precomputes the RBC geometry (`facecenter`, `facenormal`, `rbcorigin`, `facer`). For reconstruction, `jacepssigma` chains the absorption-style Jacobian into permittivity/conductivity Jacobians; multi-frequency data is supported through the multi-spectral machinery. See `test/test_mwt.py` for end-to-end examples.
+
+> **Note:** MWT and time-domain modes are mutually exclusive, and time-domain requires `omega = 0`.
+
+---
+
+## Time-Domain DOT
+
+A time-resolved (TPSF) forward solver is available using an implicit **theta-method / Crank-Nicolson** time-stepping scheme. It is triggered when `cfg['tstart']`, `cfg['tstep']`, and `cfg['tend']` are all set (and requires `omega = 0`).
+
+```python
+cfg = {
+    # ... standard DOT mesh + [mua, musp, g, n] properties ...
+    'omega':  0,           # required for time-domain
+    'tstart': 0.0,
+    'tstep':  50e-12,      # 50 ps
+    'tend':   2e-9,        # 2 ns
+}
+cfg, sd = rb.meshprep(cfg)
+detphi, phi = rb.run(cfg)
+# detphi shape: (Ndet, Nsrc, Nt) - temporal point-spread functions
+```
+
+| Option (kwarg) | Default | Description |
+|----------------|---------|-------------|
+| `theta` | 0.5 | Time-stepping weight (0.5 = Crank-Nicolson, 1.0 = backward Euler) |
+| `srctemporal` | impulse | Source time profile: `None` (impulse/TPSF), a callable `s(t)`, or a per-step array |
+| `tdsavevol` | False | If `True`, also return the volumetric field `(Nn, Nsrc, Nt)` |
+
+See `test/test_td.py` for impulse, custom-pulse, and validation examples.
+
+---
+
+## Ratiometric (fNIRS) Reconstruction
+
+Many measurement systems (e.g. fNIRS) report **relative** changes `I/I₀` rather than absolute fluence. Setting `recon['isratio'] = True` tells `runrecon` that the supplied `data` are ratios; on the first iteration they are rescaled by the forward-model baseline so the Gauss-Newton misfit is computed consistently in absolute terms.
+
+```python
+recon = {
+    'node': recon_node, 'elem': recon_elem,
+    'lambda': 1e-4,
+    'isratio': True,        # 'data' holds I/I0 ratios (e.g. fNIRS)
+}
+newrecon, resid, newcfg = rb.run(cfg, recon, ratio_data, sd, maxiter=10)
+```
 
 ---
 
@@ -467,6 +620,24 @@ cfg, sd = rb.meshprep(cfg)
 detval, phi = rb.run(cfg)
 ```
 
+### Demo Scripts
+
+The `example/` directory contains runnable demos:
+
+| Script | Topic |
+|--------|-------|
+| `demo_redbird_basic.py` | Minimal forward + reconstruction |
+| `demo_redbird_forward.py` | Forward simulation |
+| `demo_redbird_forward_heterogeneous.py` | Heterogeneous-medium forward |
+| `demo_redbird_forward_layered.py` | Layered-medium forward |
+| `demo_redbird_forward_expert.py` | Low-level forward API |
+| `demo_redbird_recon.py` / `demo_redbird_recon_expert.py` | FEM reconstruction |
+| `demo_redbird_widefield.py` / `demo_redbird_recon_widefield.py` | Wide-field forward / reconstruction |
+| `demo_redbird_forward_mc.py` | Monte Carlo (pmmc) forward vs FEM |
+| `demo_redbird_jacobian_mc.py` | Mesh-mode MC adjoint Jacobian |
+| `demo_redbird_recon_mc.py` | MC-based CW DOT reconstruction (pmmc) |
+| `demo_redbird_recon_mcx.py` | Voxel-grid MC reconstruction with matrix-free LSQR (pmcx) |
+
 ---
 
 ## Units
@@ -480,6 +651,9 @@ detval, phi = rb.run(cfg)
 | Water/lipid content | volume fraction (0-1) |
 | Frequency | Hz (converted to rad/s internally) |
 | Fluence | 1/mm² |
+| Time (time-domain gate) | seconds (s) |
+| Relative permittivity (εr, MWT) | dimensionless |
+| Conductivity (σ, MWT) | S/mm |
 
 ---
 
