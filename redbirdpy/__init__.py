@@ -52,7 +52,7 @@ Author: Translated from Redbird MATLAB toolbox by Qianqian Fang (q.fang <at> neu
 License: GPL version 3
 """
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 __author__ = "Qianqian Fang"
 
 import numpy as np
