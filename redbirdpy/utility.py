@@ -139,9 +139,18 @@ def meshprep(cfg: dict) -> Tuple[dict, np.ndarray]:
     # Reorient elements to have positive volume (outward normals)
     if not cfg.get("isreoriented", False):
         if HAS_ISO2MESH:
-            # iso2mesh.meshreorient handles 1-based indices and returns volumes
+            # iso2mesh.meshreorient handles 1-based indices and returns volumes.
+            # Take the ABSOLUTE volume, matching rbmeshprep.m which computes
+            # cfg.evol = elemvolume(node, elem) (unsigned). meshreorient's second
+            # return is the SIGNED volume in iso2mesh's convention -- negative for a
+            # right-handed tet -- and is measured BEFORE the reorienting swap, so it
+            # does not even describe the elements being returned here. Storing it
+            # unchanged leaves cfg['evol'] uniformly negative for meshes iso2mesh
+            # considers already-oriented, which negates the FEM stiffness matrix
+            # (evol scales the volume integrals and deldotdel) and silently yields a
+            # sign-flipped, oscillatory "solution".
             elem_reoriented, evol, _ = i2m.meshreorient(node, elem[:, :4])
-            cfg["evol"] = evol
+            cfg["evol"] = np.abs(evol)
         else:
             elem_reoriented = _meshreorient_fallback(node, elem[:, :4])
 
