@@ -1138,10 +1138,21 @@ def femrhs(
 
     col_idx = 0
 
-    # Process point sources using iso2mesh.tsearchn
+    # Locate every point optode in a single pass: each tsearchn call rebuilds
+    # the element KD-tree over the whole mesh, so querying the sources and the
+    # detectors together halves that cost
     if srcnum > 0:
         optsrc = np.atleast_2d(optsrc)
-        locsrc, barysrc = i2m.tsearchn(cfg["node"], elem, optsrc[:, :3])
+    if detnum > 0:
+        optdet = np.atleast_2d(optdet)
+
+    optpts = [o[:, :3] for o, n in ((optsrc, srcnum), (optdet, detnum)) if n > 0]
+    if optpts:
+        loc_all, bary_all = i2m.tsearchn(cfg["node"], elem, np.vstack(optpts))
+
+    # Process point sources
+    if srcnum > 0:
+        locsrc, barysrc = loc_all[:srcnum], bary_all[:srcnum]
 
         for i in range(srcnum):
             if not np.isnan(locsrc[i]):
@@ -1159,10 +1170,9 @@ def femrhs(
         # loc/bary already NaN for wide-field indices
         col_idx += wfsrcnum
 
-    # Process point detectors using iso2mesh.tsearchn
+    # Process point detectors
     if detnum > 0:
-        optdet = np.atleast_2d(optdet)
-        locdet, barydet = i2m.tsearchn(cfg["node"], elem, optdet[:, :3])
+        locdet, barydet = loc_all[srcnum:], bary_all[srcnum:]
 
         for i in range(detnum):
             if not np.isnan(locdet[i]):
