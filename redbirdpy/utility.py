@@ -1469,26 +1469,20 @@ def _nodevolume(node: np.ndarray, elem: np.ndarray, evol: np.ndarray) -> np.ndar
 
 def _femnz(elem: np.ndarray, nn: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Get sparse matrix non-zero indices for FEM assembly."""
-    elem_0 = elem[:, :4].astype(int) - 1
+    elem_0 = elem[:, :4].astype(np.int64) - 1
 
-    conn = [set() for _ in range(nn)]
+    # every ordered pair of distinct nodes sharing an element
+    i, j = np.meshgrid(np.arange(4), np.arange(4), indexing="ij")
+    offdiag = i.ravel() != j.ravel()
+    rows = elem_0[:, i.ravel()[offdiag]].ravel()
+    cols = elem_0[:, j.ravel()[offdiag]].ravel()
 
-    for e in elem_0:
-        for i in range(4):
-            for j in range(4):
-                if i != j:
-                    conn[e[i]].add(e[j])
+    # deduplicate on a single integer key: np.unique(..., axis=0) on the pairs
+    # would lexsort and is an order of magnitude slower
+    key = np.unique(rows * nn + cols)
+    rows, cols = key // nn, key % nn
 
-    connnum = np.array([len(c) for c in conn])
-
-    rows = []
-    cols = []
-    for i in range(nn):
-        for j in conn[i]:
-            rows.append(i)
-            cols.append(j)
-
-    return np.array(rows), np.array(cols), connnum
+    return rows, cols, np.bincount(rows, minlength=nn)
 
 
 # ============== Fallback implementations ==============
