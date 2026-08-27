@@ -220,12 +220,16 @@ def _solve_iterative_column(args):
     else:
         raise ValueError(f"Unknown solver type: {solver_type}")
 
+    # scipy's qmr takes left/right preconditioners M1/M2 and has no M
+    # argument at all, so passing M= raises TypeError for it
+    pc = {"M1": M} if solver_type == "qmr" else {"M": M}
+
     # Solve
     try:
-        x_col, info = solver_func(A, rhs_col, M=M, rtol=tol, maxiter=maxiter)
+        x_col, info = solver_func(A, rhs_col, rtol=tol, maxiter=maxiter, **pc)
     except TypeError:
         # Older scipy versions use 'tol' instead of 'rtol'
-        x_col, info = solver_func(A, rhs_col, M=M, tol=tol, maxiter=maxiter)
+        x_col, info = solver_func(A, rhs_col, tol=tol, maxiter=maxiter, **pc)
 
     return col_idx, x_col, info
 
@@ -440,6 +444,11 @@ def femsolve(
     rhs_was_1d = rhs.ndim == 1
     if rhs_was_1d:
         rhs = rhs.reshape(-1, 1)
+    # The caller's rhs in its original shape, used when a branch re-dispatches
+    # to another method: recursing with the reshaped 2-D copy would clear
+    # rhs_was_1d in the inner call and silently turn a 1-D request into an
+    # (n, 1) result.
+    rhs_orig = rhs.reshape(-1) if rhs_was_1d else rhs
 
     n, ncol = rhs.shape
     is_complex = np.iscomplexobj(Amat) or np.iscomplexobj(rhs)
@@ -485,7 +494,7 @@ def femsolve(
     if method == "pardiso":
         if _DIRECT_SOLVER != "pardiso":
             warnings.warn("pypardiso not available, falling back")
-            return femsolve(Amat, rhs, method="direct", **kwargs)
+            return femsolve(Amat, rhs_orig, method="direct", **kwargs)
 
         if is_complex:
             # Convert complex system to real-valued form:
@@ -517,11 +526,16 @@ def femsolve(
             # Real matrix - batch solve all RHS at once
             Acsr = Amat.tocsr()
             x = _pardiso_solve(Acsr, rhs)
+            # pardiso squeezes a single-column RHS to 1-D, same as in the
+            # complex branch above - keep the (n, ncol) shape every other
+            # solver branch produces
+            if x.ndim == 1:
+                x = x.reshape(-1, 1)
 
     elif method == "umfpack":
         if not _HAS_UMFPACK:
             warnings.warn("scikit-umfpack not available, falling back to superlu")
-            return femsolve(Amat, rhs, method="superlu", **kwargs)
+            return femsolve(Amat, rhs_orig, method="superlu", **kwargs)
 
         Acsc = Amat.tocsc()
         # Use UMFPACK via scipy's spsolve (auto-selects UMFPACK when installed)
@@ -542,17 +556,17 @@ def femsolve(
     elif method == "cholmod":
         if not _HAS_CHOLMOD:
             warnings.warn("scikit-sparse not available, falling back")
-            return femsolve(Amat, rhs, method="direct", **kwargs)
+            return femsolve(Amat, rhs_orig, method="direct", **kwargs)
 
         if is_complex:
             fallback = get_direct_solver_for_matrix()
             if verbose:
                 print(f"cholmod doesn't support complex, using {fallback}")
-            return femsolve(Amat, rhs, method=fallback, **kwargs)
+            return femsolve(Amat, rhs_orig, method=fallback, **kwargs)
 
         if not is_spd:
             warnings.warn("cholmod requires SPD matrix, falling back")
-            return femsolve(Amat, rhs, method="direct", **kwargs)
+            return femsolve(Amat, rhs_orig, method="direct", **kwargs)
 
         Acsc = Amat.tocsc()
         factor = _cholmod_cholesky(Acsc)
@@ -594,7 +608,7 @@ def femsolve(
     elif method == "blqmr":
         if not _HAS_BLQMR:
             warnings.warn("blocksolver not available, falling back to direct")
-            return femsolve(Amat, rhs, method="direct", **kwargs)
+            return femsolve(Amat, rhs_orig, method="direct", **kwargs)
 
         M1 = kwargs.get("M1", None)
         M2 = kwargs.get("M2", None)
@@ -674,11 +688,11 @@ def femsolve(
     elif method == "cg+amg":
         if not _HAS_AMG:
             warnings.warn("pyamg not available, falling back to CG")
-            return femsolve(Amat, rhs, method="cg", **kwargs)
+            return femsolve(Amat, rhs_orig, method="cg", **kwargs)
 
         if is_complex:
             warnings.warn("cg+amg doesn't support complex, falling back to gmres")
-            return femsolve(Amat, rhs, method="gmres", **kwargs)
+            return femsolve(Amat, rhs_orig, method="gmres", **kwargs)
 
         nthread = kwargs.get("nthread", None)
         if nthread is None:
@@ -719,7 +733,7 @@ def femsolve(
     elif method == "cg":
         if is_complex:
             warnings.warn("cg requires Hermitian matrix, falling back to gmres")
-            return femsolve(Amat, rhs, method="gmres", **kwargs)
+            return femsolve(Amat, rhs_orig, method="gmres", **kwargs)
 
         nthread = kwargs.get("nthread", None)
         if nthread is None:
@@ -863,11 +877,11 @@ def femsolve(
     elif method == "minres+amg":
         if not _HAS_AMG:
             warnings.warn("pyamg not available, falling back to MINRES")
-            return femsolve(Amat, rhs, method="minres", **kwargs)
+            return femsolve(Amat, rhs_orig, method="minres", **kwargs)
 
         if is_complex:
             warnings.warn("minres+amg doesn't support complex, falling back to gmres")
-            return femsolve(Amat, rhs, method="gmres", **kwargs)
+            return femsolve(Amat, rhs_orig, method="gmres", **kwargs)
 
         nthread = kwargs.get("nthread", None)
         if nthread is None:
@@ -906,6 +920,13 @@ def femsolve(
                         print(f"minres+amg [col {i+1}]: {status}")
 
     elif method == "minres":
+        if is_complex:
+            # scipy's minres is real-only: given a complex system it discards
+            # the imaginary part (ComplexWarning) and returns a real solution.
+            # Same guard as 'cg' and 'minres+amg' above.
+            warnings.warn("minres doesn't support complex, falling back to gmres")
+            return femsolve(Amat, rhs_orig, method="gmres", **kwargs)
+
         nthread = kwargs.get("nthread", None)
         if nthread is None:
             nthread = min(ncol, multiprocessing.cpu_count())
@@ -942,6 +963,11 @@ def femsolve(
 
     else:
         raise ValueError(f"Unknown solver: {method}")
+
+    # Every branch must return the same shape for the same input: (n, ncol)
+    # for a 2-D rhs, (n,) only when the caller passed a 1-D rhs. Callers that
+    # switch solvers otherwise break silently on a single-column rhs.
+    x = np.asarray(x).reshape(n, ncol)
 
     # Flatten output if input was 1D
     if rhs_was_1d:
