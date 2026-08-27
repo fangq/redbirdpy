@@ -46,13 +46,22 @@ def _lattice(nx, ny, nz, h=2.0):
     def idx(i, j, k):
         return (i * ny + j) * nz + k + 1  # 1-based
 
-    tets = [[0, 4, 6, 7], [0, 4, 5, 7], [0, 2, 6, 7],
-            [0, 2, 3, 7], [0, 1, 5, 7], [0, 1, 3, 7]]
+    tets = [
+        [0, 4, 6, 7],
+        [0, 4, 5, 7],
+        [0, 2, 6, 7],
+        [0, 2, 3, 7],
+        [0, 1, 5, 7],
+        [0, 1, 3, 7],
+    ]
     els = []
     for i in range(nx - 1):
         for j in range(ny - 1):
             for k in range(nz - 1):
-                c = [idx(i + (o >> 2 & 1), j + (o >> 1 & 1), k + (o & 1)) for o in range(8)]
+                c = [
+                    idx(i + (o >> 2 & 1), j + (o >> 1 & 1), k + (o & 1))
+                    for o in range(8)
+                ]
                 for t in tets:
                     els.append([c[t[0]], c[t[1]], c[t[2]], c[t[3]], 1])
     elem = np.array(els, dtype=int)
@@ -110,8 +119,10 @@ class TestMeshprepEvolSign(unittest.TestCase):
         cfg = _prep(node, elem)
         evol = np.asarray(cfg["evol"]).ravel()
         self.assertEqual(evol.size, elem.shape[0])
-        self.assertTrue(np.all(evol > 0),
-                        "%d of %d evol entries are negative" % (int((evol < 0).sum()), evol.size))
+        self.assertTrue(
+            np.all(evol > 0),
+            "%d of %d evol entries are negative" % (int((evol < 0).sum()), evol.size),
+        )
         np.testing.assert_allclose(evol, 8.0 / 6.0, rtol=1e-10)
 
     def test_deldotdel_sign_follows_evol(self):
@@ -120,9 +131,12 @@ class TestMeshprepEvolSign(unittest.TestCase):
         cfg = _prep(node, elem)
         dd = np.asarray(cfg["deldotdel"])
         # the diagonal terms of grad(phi_i).grad(phi_i) are strictly positive
-        self.assertGreater(dd.sum(), 0,
-                           "deldotdel sums to %.6g; a negative total means the "
-                           "stiffness matrix is sign-flipped" % dd.sum())
+        self.assertGreater(
+            dd.sum(),
+            0,
+            "deldotdel sums to %.6g; a negative total means the "
+            "stiffness matrix is sign-flipped" % dd.sum(),
+        )
 
 
 class TestForwardSolutionIsPhysical(unittest.TestCase):
@@ -138,15 +152,22 @@ class TestForwardSolutionIsPhysical(unittest.TestCase):
         fmax = f.max()
         self.assertGreater(fmax, 0)
         negfrac = float(np.mean(f < -1e-6 * fmax))
-        self.assertLess(negfrac, 0.01,
-                        "%.1f%% of nodes are negative: the solve is not a fluence" % (100 * negfrac))
+        self.assertLess(
+            negfrac,
+            0.01,
+            "%.1f%% of nodes are negative: the solve is not a fluence"
+            % (100 * negfrac),
+        )
         self.assertGreater(f.min(), -1e-2 * fmax)
         # the peak must sit near the source, not at a far boundary/corner
         src = np.asarray(cfg["srcpos"])[0]
         peak = np.asarray(cfg["node"])[int(np.argmax(f))]
-        self.assertLess(np.linalg.norm(peak - src), 5.0,
-                        "fluence peaks at %s, %.1f mm from the source at %s"
-                        % (peak, np.linalg.norm(peak - src), src))
+        self.assertLess(
+            np.linalg.norm(peak - src),
+            5.0,
+            "fluence peaks at %s, %.1f mm from the source at %s"
+            % (peak, np.linalg.norm(peak - src), src),
+        )
 
 
 if __name__ == "__main__":
