@@ -231,6 +231,11 @@ def meshprep(cfg: dict) -> Tuple[dict, np.ndarray]:
             else:
                 cfg["reff"] = getreff(bkprop[3], 1.0)
                 cfg["musp0"] = bkprop[1] * (1 - bkprop[2])
+                reff_face, ltr_label = _label_bc(cfg, cfg.get("prop"), bkprop)
+                if reff_face is not None:
+                    cfg["reff"] = reff_face
+                if ltr_label is not None:
+                    cfg["ltrlabel"] = ltr_label
     else:
         # MWT: precompute Bayliss-Turkel RBC geometry on cfg.face
         face_0 = cfg["face"][:, :3].astype(int) - 1  # 1-based -> 0-based
@@ -710,6 +715,8 @@ def _apply_bc_weighting(
     npattern = srcbc.shape[0]
 
     # Boundary condition coefficient: 1/18 = 1/2 * 1/9
+    if np.ndim(Reff) > 0:
+        Reff = np.asarray(Reff)[np.asarray(pface).astype(int) - 1]
     Adiagbc = parea * ((1 - Reff) / (18 * (1 + Reff)))
     Adiagbc_weighted = Adiagbc[:, np.newaxis] * srcbc.T  # (Nface, Npattern)
 
@@ -1056,14 +1063,16 @@ def getoptodes(
         srcdir = np.atleast_2d(np.asarray(cfg["srcdir"]))
         if srcdir.shape[0] == 1 and srcpos.shape[0] > 1:
             srcdir = np.tile(srcdir, (srcpos.shape[0], 1))
-        pointsrc = srcpos[:, :3] + srcdir[:, :3] * ltr
+        srcltr = getltr(cfg, wv, pos=srcpos[:, :3])
+        pointsrc = srcpos[:, :3] + srcdir[:, :3] * np.reshape(srcltr, (-1, 1))
 
     if "detpos" in cfg and cfg["detpos"] is not None and cfg["detpos"].size > 0:
         detpos = np.atleast_2d(np.asarray(cfg["detpos"]))
         detdir = np.atleast_2d(np.asarray(cfg.get("detdir", cfg["srcdir"])))
         if detdir.shape[0] == 1 and detpos.shape[0] > 1:
             detdir = np.tile(detdir, (detpos.shape[0], 1))
-        pointdet = detpos[:, :3] + detdir[:, :3] * ltr
+        detltr = getltr(cfg, wv, pos=detpos[:, :3])
+        pointdet = detpos[:, :3] + detdir[:, :3] * np.reshape(detltr, (-1, 1))
 
     return pointsrc, pointdet, widesrc, widedet
 
@@ -1309,8 +1318,14 @@ def getcfg(cfgs: dict, key) -> dict:
     return out
 
 
-def getltr(cfg: dict, wv: str = "") -> float:
-    """Calculate transport mean free path l_tr = 1/(mua + musp)."""
+def getltr(cfg: dict, wv: str = "", pos=None):
+    """Calculate transport mean free path l_tr = 1/(mua + musp).
+
+    With no ``pos`` this returns the single bulk value, as before. Given
+    optode coordinates it returns one l_tr per position, taken from the
+    medium exposed at the nearest boundary face -- optodes on different
+    media must not be sunk to the same depth.
+    """
     from . import property as prop_module
 
     bkprop = prop_module.getbulk(cfg)
@@ -1323,7 +1338,100 @@ def getltr(cfg: dict, wv: str = "") -> float:
     mua = bkprop[0]
     musp = bkprop[1] * (1 - bkprop[2])
 
-    return 1.0 / (mua + musp)
+    ltr = 1.0 / (mua + musp)
+
+    ltrlabel = cfg.get("ltrlabel", None)
+    if pos is None or ltrlabel is None:
+        return ltr
+
+    from scipy.spatial import cKDTree
+
+    fs = faceseg(cfg)
+    if fs is None:
+        return ltr
+    face_0 = np.asarray(cfg["face"])[:, :3].astype(int) - 1
+    centroid = cfg["node"][face_0, :3].mean(axis=1)
+    nearest = cKDTree(centroid).query(np.atleast_2d(pos)[:, :3])[1]
+    out = ltrlabel[np.clip(fs[nearest].astype(int), 0, len(ltrlabel) - 1)]
+    return np.where(np.isfinite(out), out, ltr)
+
+
+def _label_bc(cfg, prop, bkprop):
+    """Per-face Reff and per-label l_tr for label-based properties.
+
+    ``getbulk`` collapses the whole surface to the single medium owning
+    ``cfg['face'][0,0]``. That is only right when one medium is exposed; with
+    several, each boundary face needs the Reff of the medium behind it, and
+    each optode the l_tr of the medium it sits on.
+
+    Returns ``(reff, ltr)`` where ``reff`` is a scalar when the exposed media
+    share a refractive index and a per-face array otherwise, and ``ltr`` is a
+    per-label array (index = label) or None when a single medium is exposed.
+    """
+    prop = np.atleast_2d(np.asarray(prop, dtype=float))
+    nn = cfg["node"].shape[0]
+    ne = np.asarray(cfg["elem"]).shape[0]
+    if prop.shape[0] >= min(nn, ne) or prop.shape[1] < 4:
+        return None, None  # node/element-based, not label-based
+
+    fs = faceseg(cfg)
+    if fs is None:
+        return None, None
+    exposed = np.unique(np.clip(fs.astype(int), 0, prop.shape[0] - 1))
+    if exposed.size < 2:
+        return None, None  # single exposed medium: keep the scalar path
+
+    nlabel = prop.shape[0]
+    ltr = np.full(nlabel, np.nan)
+    mut = prop[:, 0] + prop[:, 1] * (1 - prop[:, 2])
+    np.divide(1.0, mut, out=ltr, where=mut > 0)
+
+    if np.ptp(prop[exposed, 3]) == 0:
+        return None, ltr  # same n everywhere on the surface: Reff stays scalar
+
+    reff_label = np.array([getreff(n, 1.0) for n in prop[:, 3]])
+    return reff_label[np.clip(fs.astype(int), 0, nlabel - 1)], ltr
+
+
+def faceseg(cfg: dict) -> np.ndarray:
+    """Label of the medium behind each boundary face in ``cfg['face']``.
+
+    Needed because the Robin boundary condition and the optode sinking depth
+    both depend on the medium actually exposed at the surface, which is not a
+    single value when more than one labeled region reaches the boundary.
+
+    Returns an int array of length ``len(cfg['face'])``, or None if the mesh
+    is not label-based.
+    """
+    seg = cfg.get("seg", None)
+    if seg is None or "face" not in cfg or cfg["face"] is None:
+        return None
+    seg = np.asarray(seg).ravel()
+    elem = np.asarray(cfg["elem"])[:, :4].astype(np.int64) - 1
+    nn = cfg["node"].shape[0]
+
+    if seg.size == nn:  # node-based labels: take the label at the face nodes
+        face_0 = np.asarray(cfg["face"])[:, :3].astype(np.int64) - 1
+        return seg[face_0].max(axis=1)
+    if seg.size != elem.shape[0]:
+        return None
+
+    # element-based labels: match each boundary face to the element owning it,
+    # keying the sorted node triples as single integers
+    faces = np.vstack(
+        (elem[:, [0, 1, 2]], elem[:, [0, 1, 3]], elem[:, [0, 2, 3]], elem[:, [1, 2, 3]])
+    )
+    faces = np.sort(faces, axis=1)
+    m = int(elem.max()) + 1
+    key = (faces[:, 0] * m + faces[:, 1]) * m + faces[:, 2]
+
+    query = np.sort(np.asarray(cfg["face"])[:, :3].astype(np.int64) - 1, axis=1)
+    qkey = (query[:, 0] * m + query[:, 1]) * m + query[:, 2]
+
+    order = np.argsort(key, kind="stable")
+    pos = np.searchsorted(key[order], qkey)
+    pos = np.clip(pos, 0, order.size - 1)
+    return seg[order[pos] % elem.shape[0]]
 
 
 def getreff(n_in: float, n_out: float = 1.0) -> float:

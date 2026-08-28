@@ -162,6 +162,50 @@ class TestMeshprep(unittest.TestCase):
 
         self.assertIn("reff", cfg_out)
 
+    def test_meshprep_per_label_boundary(self):
+        """Two exposed media must get their own Reff and sinking depth."""
+        import iso2mesh as i2m
+
+        no, fc, seeds = i2m.latticegrid([0, 30, 60], [0, 60], [0, 30])
+        node, elem, _ = i2m.s2m(no, fc, 1, 20.0, "tetgen", seeds)
+        seg = elem[:, 4].astype(int)
+        n1, n2, musp1, musp2, mua = 1.33, 1.55, 0.5, 3.0, 0.006
+        cfg = {
+            "node": node,
+            "elem": elem[:, :4],
+            "seg": seg,
+            "prop": np.array([[0, 0, 1, 1], [mua, musp1, 0, n1], [mua, musp2, 0, n2]]),
+            "srcpos": np.array([[10.0, 30.0, 0.0], [50.0, 30.0, 0.0]]),
+            "srcdir": [0, 0, 1],
+            "detpos": np.array([[20.0, 30.0, 0.0]]),
+            "detdir": [0, 0, 1],
+            "omega": 0,
+        }
+        cfg, _ = utility.meshprep(cfg)
+
+        # Reff is per boundary face, matching the medium behind each face
+        fseg = utility.faceseg(cfg)
+        reff = np.asarray(cfg["reff"])
+        self.assertEqual(reff.size, cfg["face"].shape[0])
+        for label, n in ((1, n1), (2, n2)):
+            np.testing.assert_allclose(
+                reff[fseg == label], utility.getreff(n, 1.0), rtol=1e-12
+            )
+
+        # each source is sunk by the l_tr of the medium it sits on
+        src = utility.getoptodes(cfg)[0]
+        np.testing.assert_allclose(
+            src[:, 2], [1.0 / (mua + musp1), 1.0 / (mua + musp2)], rtol=1e-12
+        )
+
+    def test_meshprep_single_medium_keeps_scalar_reff(self):
+        """One exposed refractive index must keep the scalar Reff."""
+        cfg = create_simple_cfg()
+        cfg_out, _ = utility.meshprep(cfg)
+
+        self.assertEqual(np.ndim(cfg_out["reff"]), 0)
+        self.assertIsInstance(utility.getltr(cfg_out), float)
+
     def test_meshprep_sets_isreoriented(self):
         """meshprep should set isreoriented flag."""
         cfg = create_simple_cfg()
