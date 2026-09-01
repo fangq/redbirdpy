@@ -201,8 +201,10 @@ ax.plot(
 )
 
 # Add noise to detector values
-# addnoise signature: addnoise(data, noiselvl, offset) where noiselvl is SNR in dB
-newdata = rb.addnoise(detval, 110, 40)
+# addnoise(data, snrshot, snrthermal), both SNRs in dB. snrshot is referenced
+# to the strongest channel (max|detval| ~ 2e-7 here); this 43 dB matches the
+# 110 dB used before addnoise was renormalized
+newdata = rb.addnoise(detval, 43, 40)
 ax.plot(
     dist.flatten(),
     np.log10(np.abs(newdata.flatten()) + 1e-20),

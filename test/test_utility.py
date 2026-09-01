@@ -775,6 +775,74 @@ class TestAddnoiseExtended(unittest.TestCase):
 
         self.assertFalse(np.allclose(noisy, data))
 
+    def test_addnoise_snr_matches_request(self):
+        """Requested snrshot is the SNR of the strongest channel, and is
+        invariant to the scale/units of the data."""
+        amp = np.logspace(0, -2, 3)[:, None]
+
+        for scale in (1.0, 1e-6):
+            data = np.tile(scale * amp, (1, 4000))
+            noisy = utility.addnoise(data, snrshot=60, randseed=11)
+
+            for row, expected in enumerate((60.0, 50.0, 40.0)):
+                sig = data[row, 0]
+                snr = 20 * np.log10(sig / np.std(noisy[row] - data[row]))
+                self.assertLess(abs(snr - expected), 1.5)
+
+    def test_addnoise_thermal_floor_level(self):
+        """Thermal noise sigma is max|data| * 10**(-snrthermal/20)."""
+        data = np.full((1, 8000), 1e-6)
+
+        noisy = utility.addnoise(data, snrshot=np.inf, snrthermal=40, randseed=13)
+
+        self.assertAlmostEqual(np.std(noisy - data) / 1e-6, 0.01, places=3)
+
+    def test_addnoise_complex_real_valued_snr(self):
+        """A real-valued snr must work for complex data: amplitude noise
+        matches the CW case and phase error follows sigma/|data|."""
+        dcw = np.full(8000, 1e-6)
+        dfd = np.full(8000, 1e-6 * np.exp(1j * 0.7))
+
+        ncw = utility.addnoise(dcw, snrshot=50, randseed=21)
+        nfd = utility.addnoise(dfd, snrshot=50, randseed=21)
+
+        self.assertTrue(np.iscomplexobj(nfd))
+
+        ratio = np.std(np.abs(nfd) - 1e-6) / np.std(ncw - dcw)
+        self.assertLess(abs(ratio - 1), 0.1)
+
+        sigma_phase = np.std(np.angle(nfd) - 0.7)
+        self.assertLess(abs(sigma_phase / 10 ** (-50 / 20) - 1), 0.1)
+
+    def test_addnoise_complex_noise_is_circular(self):
+        """Noise must be isotropic about the signal phasor, not pinned to
+        the real axis."""
+        dfd = np.full(8000, 1e-6 * np.exp(1j * 0.7))
+
+        nfd = utility.addnoise(dfd, snrshot=50, randseed=21)
+        err = (nfd - dfd) * np.exp(-1j * 0.7)
+
+        self.assertLess(abs(np.std(err.imag) / np.std(err.real) - 1), 0.15)
+
+    def test_addnoise_imag_snr_adds_phase_jitter(self):
+        """The imaginary part of the snr sets extra phase jitter, in radian."""
+        dfd = np.full(8000, 1e-6 * np.exp(1j * 0.7))
+
+        noisy = utility.addnoise(dfd, snrshot=complex(np.inf, 40), randseed=22)
+
+        self.assertLess(abs(np.std(np.angle(noisy) - 0.7) / 0.01 - 1), 0.1)
+
+    def test_addnoise_leaves_global_rng_alone(self):
+        """addnoise must not reseed the process-wide numpy RNG."""
+        np.random.seed(7)
+        before = np.random.rand()
+
+        np.random.seed(7)
+        utility.addnoise(np.full(10, 1e-6), snrshot=40)
+        after = np.random.rand()
+
+        self.assertEqual(before, after)
+
 
 class TestMeshinterpExtended(unittest.TestCase):
     """Extended tests for meshinterp function."""

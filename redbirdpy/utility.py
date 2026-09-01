@@ -1493,37 +1493,75 @@ def addnoise(
     snrthermal: float = np.inf,
     randseed: int = 123456789,
 ) -> np.ndarray:
-    """Add simulated shot and thermal noise to data."""
-    np.random.seed(randseed)
+    """
+    Add simulated shot and thermal noise to data.
 
-    if np.isinf(snrshot) and np.isinf(snrthermal):
+    snrshot is the SNR (in dB) of the strongest data point; the shot-noise
+    standard deviation follows
+
+        sigma(i) = sqrt(|data(i)|/max|data|) * max|data| * 10**(-snrshot/20)
+
+    so that weaker channels have a proportionally lower SNR, following
+    SNR(i) = snrshot + 10*log10(|data(i)|/max|data|) dB.
+
+    NOTE: this normalization was changed on 2026/09/01 - previously the
+    shot-noise was not referenced to max|data|, making the requested SNR
+    depend on the units of the data. To convert an snrshot value used with
+    the old code, use snrshot_new = snrshot_old + 10*log10(max|data|).
+
+    snrthermal sets a data-independent noise floor of
+    max|data| * 10**(-snrthermal/20).
+
+    For complex (frequency-domain) data, the noise is added as a
+    circularly-symmetric complex gaussian with sigma per quadrature, so that
+    the amplitude noise matches that of real-valued (CW) data at the same
+    snr, and the phase error follows sigma_phase(i) = sigma(i)/|data(i)|
+    (in radian) automatically; the total complex noise is sqrt(2)*sigma.
+    If snrshot or snrthermal is complex, its imaginary part adds an
+    independent phase jitter of 10**(-imag(snr)/20) radian, applied
+    multiplicatively; an imaginary part of 0 adds no jitter.
+    """
+    rng = np.random.default_rng(randseed)  # don't touch the global RNG state
+
+    data = np.asarray(data)
+    max_amp = np.max(np.abs(data))
+
+    sigma_shot = np.sqrt(max_amp) * 10 ** (-np.real(snrshot) / 20)
+    sigma_thermal = max_amp * 10 ** (-np.real(snrthermal) / 20)
+
+    # extra phase jitter, requested via the imaginary part of the snr inputs;
+    # independent contributions add in quadrature
+    sigma_phase = 0.0
+    if np.imag(snrshot) != 0:
+        sigma_phase += 10 ** (-np.imag(snrshot) / 10)
+    if np.imag(snrthermal) != 0:
+        sigma_phase += 10 ** (-np.imag(snrthermal) / 10)
+    sigma_phase = np.sqrt(sigma_phase)
+
+    if sigma_shot == 0 and sigma_thermal == 0 and sigma_phase == 0:
         warnings.warn("No noise added")
         return data.copy()
 
-    datanorm = np.abs(data)
-    max_amp = np.max(datanorm)
-
-    sigma_shot = 10 ** (-np.real(snrshot) / 20)
-    sigma_thermal = max_amp * 10 ** (-np.real(snrthermal) / 20)
-
-    if np.isreal(data).all():
+    if not np.iscomplexobj(data):
         newdata = (
-            data + np.sqrt(np.abs(data)) * np.random.randn(*data.shape) * sigma_shot
+            data + np.sqrt(np.abs(data)) * rng.standard_normal(data.shape) * sigma_shot
         )
-        newdata += np.random.randn(*data.shape) * sigma_thermal
+        newdata = newdata + rng.standard_normal(data.shape) * sigma_thermal
     else:
-        sigma_shot_phase = 10 ** (-np.imag(snrshot) / 20)
-        sigma_thermal_phase = 10 ** (-np.imag(snrthermal) / 20)
+        # circularly-symmetric complex gaussian, unit variance per quadrature,
+        # so that the in-phase (amplitude) noise matches the real-data branch
+        def cnoise():
+            return rng.standard_normal(data.shape) + 1j * rng.standard_normal(
+                data.shape
+            )
 
-        amp_shot = np.random.randn(*data.shape) * sigma_shot
-        phase_shot = np.random.randn(*data.shape) * sigma_shot_phase * 2 * np.pi
-        amp_thermal = np.random.randn(*data.shape) * sigma_thermal
-        phase_thermal = np.random.randn(*data.shape) * sigma_thermal_phase * 2 * np.pi
+        newdata = data + np.sqrt(np.abs(data)) * cnoise() * sigma_shot
+        newdata = newdata + cnoise() * sigma_thermal
 
-        shot_noise = np.sqrt(np.abs(data)) * (amp_shot * np.exp(1j * phase_shot))
-        thermal_noise = amp_thermal * np.exp(1j * phase_thermal)
-
-        newdata = data + shot_noise + thermal_noise
+        if sigma_phase > 0:
+            newdata = newdata * np.exp(
+                1j * rng.standard_normal(data.shape) * sigma_phase
+            )
 
     return newdata
 
