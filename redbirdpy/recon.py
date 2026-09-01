@@ -172,7 +172,7 @@ def runrecon(
         # measured detphi0 holds the ratio I/I0 (= exp(-dOD)); on the first
         # iteration convert it to pseudo-absolute by scaling with the model
         # baseline detphi, so the misfit detphi0 - detphi works in absolute
-        # terms (port of redbird-m/matlab/rbrunrecon.m recon.isratio block).
+        # terms (port of redbird/matlab/rbrunrecon.m recon.isratio block).
         if iteration == 0 and isinstance(recon, dict) and recon.get("isratio"):
             if isinstance(detphi0, dict):
                 for wv in list(detphi0.keys()):
@@ -454,7 +454,7 @@ def runrecon(
 def jacop(J: np.ndarray):
     """Wrap a 4D voxel-grid Jacobian as a scipy LinearOperator.
 
-    Port of redbird-m/matlab/rbjacop.m.  The 4D Jacobian shape is
+    Port of redbird/matlab/rbjacop.m.  The 4D Jacobian shape is
     ``(Nx, Ny, Nz, Nsd)`` where ``Nsd = Ns*Nd`` is the number of
     source-detector pairs and ``J[..., k]`` is the sensitivity volume for the
     k-th pair.  We never form the ``Nv x Nv`` Hessian ``J.T @ J``; LSQR only
@@ -508,7 +508,7 @@ def reglsqr(
 ) -> Tuple[np.ndarray, dict]:
     """Iterative least-squares solve of ``J * delta_mu = r`` via LSQR.
 
-    Port of redbird-m/matlab/rbreglsqr.m.  Designed for the mcxlab voxel-grid
+    Port of redbird/matlab/rbreglsqr.m.  Designed for the mcxlab voxel-grid
     Jacobian where ``J`` is too large for the normal-equation form
     ``(J^T J + lambda I)^{-1} J^T r`` (``J^T J`` would be ``Nv x Nv`` with
     ``Nv ~ 1e6 - 1e7`` voxels).  Regularization is by **early stopping** --
@@ -1178,7 +1178,7 @@ def multispectral(
 ) -> Tuple[Union[dict, np.ndarray], np.ndarray, np.ndarray]:
     """Concatenate multi-spectral forward data into a single linear system.
 
-    Port of redbird-m/matlab/rbmultispectral.m.  When ``Jmua`` is keyed
+    Port of redbird/matlab/rbmultispectral.m.  When ``Jmua`` is keyed
     by wavelength, builds either a chromophore-space Jacobian (DOT) or
     an eps/sigma Jacobian (MWT) by chaining through the per-wavelength
     extinction coefficients / Helmholtz physics.  Optionally adds the
@@ -1364,7 +1364,7 @@ def createinv(
 ) -> Tuple[np.ndarray, np.ndarray, int]:
     """Reformulate the inverse problem in complex / real / log-phase form.
 
-    Port of redbird-m/matlab/rbcreateinv.m.  Splits a complex-valued
+    Port of redbird/matlab/rbcreateinv.m.  Splits a complex-valued
     linear system into a real-valued one when ``output`` selects
     ``'real'`` (block-diagonal Re/Im) or ``'logphase'`` (log-amplitude
     + unwrapped-phase form for RF measurements).
@@ -1465,7 +1465,7 @@ def createinv(
 def regemperical(Hess: np.ndarray, residual: float, alpha: float) -> float:
     """Empirical regularization parameter estimate.
 
-    Port of redbird-m/matlab/rbregemperical.m.
+    Port of redbird/matlab/rbregemperical.m.
 
         lambda = alpha * mean(diag(Hess)) * residual^2
 

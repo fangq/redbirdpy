@@ -180,7 +180,7 @@ def _runforward_mc(
 ) -> Tuple[Any, ...]:
     """Monte Carlo forward branch of ``runforward``.
 
-    Port of the mmclab path in redbird-m/matlab/rbrunforward.m (lines
+    Port of the mmclab path in redbird/matlab/rbrunforward.m (lines
     98-280). Routes the cfg through ``pmmc`` once per wavelength,
     rebuilds detector readings via barycentric interpolation, and packs
     the mesh-mode adjoint Jacobian into the optional 3rd return when
@@ -409,7 +409,7 @@ def _runforward_mcx(
 ) -> Tuple[Any, ...]:
     """Monte Carlo voxel-grid forward branch (mcxlab/pmcx).
 
-    Port of the cfg.vol mcxlab branch in redbird-m/matlab/rbrunforward.m
+    Port of the cfg.vol mcxlab branch in redbird/matlab/rbrunforward.m
     (~ lines 290-345).  Routes the cfg through ``pmcx`` once.  Returns the
     voxel-averaged detector readings and, when ``return_jacobian`` is True,
     the 4D voxel Jacobian ``Jext.mua`` (shape ``(Nx, Ny, Nz, Ns*Nd)``).
@@ -523,7 +523,7 @@ def _runforward_mcx(
 def _voxelmean(vol: np.ndarray, pos: np.ndarray, avgsize: float) -> float:
     """Mean of a voxel-grid scalar field over a (2*r+1)^3 block centered at pos.
 
-    Port of redbird-m/matlab/rbvoxelmean.m: clamp the block to the grid bounds
+    Port of redbird/matlab/rbvoxelmean.m: clamp the block to the grid bounds
     and return the arithmetic mean.  Used to convert a 3D fluence volume into
     a single detector reading.
     """
@@ -1492,7 +1492,7 @@ def jacepssigma(
 def jacmuafast(sd, phi, nvol, elem=None):
     """Approximated nodal-adjoint Jacobian for ``mua``.
 
-    Port of redbird-m/matlab/rbjacmuafast.m.  Implements the nodal-adjoint
+    Port of redbird/matlab/rbjacmuafast.m.  Implements the nodal-adjoint
     closed-form J_mua(n) = -V_n * phi_s(n) * phi_r(n) derived in
     Q. Fang's PhD thesis (Chap. 6 sssec:3d3d:nodal, eq.
     3d3d:adjoint:nodal).  Cheaper than the full FEM ``jac`` build; valid
@@ -1577,7 +1577,7 @@ def jacmuafast(sd, phi, nvol, elem=None):
 def jacmus(Jd, musp, g=0.0):
     """Convert the diffusion-coefficient Jacobian into a ``mus'`` Jacobian.
 
-    Port of redbird-m/matlab/rbjacmus.m.
+    Port of redbird/matlab/rbjacmus.m.
 
         J_mus' = -J_D / (3 * mus'^2 * (1 - g))
 
@@ -1597,7 +1597,7 @@ def jacmus(Jd, musp, g=0.0):
 def jacscatamp(Jd, dcoeff, wavelen, scatpow, lref=1e9):
     """Jacobian of the scattering amplitude from the diffusion-coeff Jacobian.
 
-    Port of redbird-m/matlab/rbjacscatamp.m.  Power-law model
+    Port of redbird/matlab/rbjacscatamp.m.  Power-law model
     ``musp = scatamp * (wavelen / lref)^(-scatpow)`` gives
     ``dD/dscatamp = -3 * D^2 * (wavelen/lref)^(-scatpow)``.
 
@@ -1632,7 +1632,7 @@ def jacscatamp(Jd, dcoeff, wavelen, scatpow, lref=1e9):
 def jacscatpow(Jd, dcoeff, wavelen, lref=1e9):
     """Jacobian of the scattering power from the diffusion-coeff Jacobian.
 
-    Port of redbird-m/matlab/rbjacscatpow.m.
+    Port of redbird/matlab/rbjacscatpow.m.
         dD/dscatpow = D * log(wavelen / lref)
 
     Parameters
@@ -1658,7 +1658,7 @@ def jacscatpow(Jd, dcoeff, wavelen, lref=1e9):
 def jacscat(Jd, dcoeff, scatpow, wv=None, lref=1e9, suffix=""):
     """Build scattering-amplitude and scattering-power Jacobians from J_D.
 
-    Port of redbird-m/matlab/rbjacscat.m.  Wraps :func:`jacscatamp` and
+    Port of redbird/matlab/rbjacscat.m.  Wraps :func:`jacscatamp` and
     :func:`jacscatpow` over multiple wavelengths and packages the
     results in a dict keyed by ``scatamp<suffix>`` and ``scatpow<suffix>``.
 
@@ -1711,7 +1711,7 @@ def jacscat(Jd, dcoeff, scatpow, wv=None, lref=1e9, suffix=""):
 def jacnode(Jmua_elem, Jd_elem=None, elem=None, nodelen=None):
     """Convert element-based Jacobians to node-based Jacobians.
 
-    Port of redbird-m/matlab/rbjacnode.m.  Uses the same elem-to-node
+    Port of redbird/matlab/rbjacnode.m.  Uses the same elem-to-node
     0.25-weighted scatter as :func:`redbirdpy.utility.elem2node`.
 
     Parameters

@@ -140,7 +140,7 @@ def main():
     # recon.seg = ones(Nnode), collapsing the Jacobian columns into a single
     # per-segment unknown. Each Gauss-Newton step adjusts one global mua so
     # we get a fast sanity check on the MC forward+adjoint before per-node
-    # imaging starts. Mirrors demo_redbird_recon_mc.m in redbird-m.
+    # imaging starts. Mirrors demo_redbird_recon_mc.m in redbird.
     cfg.pop("seg", None)
     recon["bulk"] = {"mua": 0.003, "musp": 0.6}
 

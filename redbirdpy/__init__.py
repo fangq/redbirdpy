@@ -106,7 +106,7 @@ def run(cfg, recon_cfg=None, detphi0=None, sd=None, **kwargs):
                    segment. Useful as a Stage-1 fast sanity check before the
                    full per-node image recon.
         - 'seg':   per-segment reconstruction driven by recon.seg / cfg.seg.
-        Port of the mode switch in redbird-m/matlab/rbrun.m.
+        Port of the mode switch in redbird/matlab/rbrun.m.
     **kwargs : dict
         Additional options passed to runforward or runrecon
 

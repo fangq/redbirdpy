@@ -1056,7 +1056,7 @@ def getoptodes(
 
     # Use explicit column slicing srcpos[:, :3] / detpos[:, :3] so a 4th
     # column (per-source weight, used by the MC path -- see _runforward_mc)
-    # doesn't broadcast through the displacement step. Mirrors the redbird-m
+    # doesn't broadcast through the displacement step. Mirrors the redbird
     # rbgetoptodes.m fix for matching Nsrc-by-3 srcpos layouts.
     if "srcpos" in cfg and cfg["srcpos"] is not None and cfg["srcpos"].size > 0:
         srcpos = np.atleast_2d(np.asarray(cfg["srcpos"]))
@@ -1117,7 +1117,7 @@ def getdistance(
 def getdetdir(cfg: dict) -> np.ndarray:
     """Estimate inward surface-normal directions at each detector position.
 
-    Port of redbird-m/matlab/rbgetdetdir.m. Used by the Monte Carlo (mmclab)
+    Port of redbird/matlab/rbgetdetdir.m. Used by the Monte Carlo (mmclab)
     forward path in `runforward` when a Jacobian is requested and the user
     didn't supply ``cfg["detdir"]``: mmc requires a (Nd, 4) inward-normal +
     focal-length array to build detector-as-adjoint sources.
@@ -1200,7 +1200,7 @@ def getdetdir_vol(cfg: dict) -> np.ndarray:
     """Estimate inward surface-normal directions at detector positions on a
     voxel-grid (cfg.vol) domain.
 
-    Port of redbird-m/matlab/rbgetdetdir_vol.m.  Used by the mcxlab branch of
+    Port of redbird/matlab/rbgetdetdir_vol.m.  Used by the mcxlab branch of
     `_runforward_mcx` when the user requests a Jacobian but hasn't supplied
     ``cfg.detdir``: mcxlab needs (Nd, 4) inward-normal + focal-length entries
     to build detector-as-adjoint disk sources.
@@ -1289,7 +1289,7 @@ def getdetdir_vol(cfg: dict) -> np.ndarray:
 def getcfg(cfgs: dict, key) -> dict:
     """Extract a single-wavelength cfg from a multi-spectral cfg dict.
 
-    Port of redbird-m/matlab/rbgetcfg.m.  Walks the top-level cfg keys
+    Port of redbird/matlab/rbgetcfg.m.  Walks the top-level cfg keys
     and, for any value that is itself a dict keyed by wavelength,
     returns the value for ``key``.  Non-dict values pass through
     unchanged.  When the input cfg contains no multi-spectral fields,
