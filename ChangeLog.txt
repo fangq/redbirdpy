@@ -1,6 +1,6 @@
 Change Log
 
-== RedbirdPy 0.5.0 (v2026, CODENAME_TBD), Qianqian Fang <q.fang at neu.edu> ==
+== RedbirdPy 0.5.0 (v2026, House Finch), Qianqian Fang <q.fang at neu.edu> ==
 
  2026-10-21 [dc54b1d] [test] add Monte Carlo (pmmc, CPU) forward tests, add the [mc] extra, bump to 0.5.0
  2026-09-01 [3ba6f54] [doc] point cross-repo references at redbird, not redbird-m

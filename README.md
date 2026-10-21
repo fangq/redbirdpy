@@ -4,7 +4,7 @@
 
 * **Copyright**: (C) Qianqian Fang (2005–2026) \<q.fang at neu.edu>
 * **License**: GNU Public License V3 or later
-* **Version**: 0.5.0 (v2026, CODENAME_TBD)
+* **Version**: 0.5.0 (v2026, House Finch)
 * **GitHub**: [https://github.com/fangq/redbirdpy](https://github.com/fangq/redbirdpy)
 * **PyPI**: [https://pypi.org/project/redbirdpy](https://pypi.org/project/redbirdpy)
 * **Acknowledgement**: This project is supported by the US National Institute of Health (NIH)
@@ -39,7 +39,7 @@
 
 ## What's New
 
-RedbirdPy v0.5.0 (v2026) is bundled with the MCX/MCX-CL/MMC v2026 (3.0) release. Since
+RedbirdPy v0.5.0 (v2026, House Finch) is bundled with the MCX/MCX-CL/MMC v2026 (3.0) release. Since
 v0.2.0, it has gained
 
 * Monte Carlo forward solvers and adjoint Jacobians: setting `cfg["nphoton"]` routes
