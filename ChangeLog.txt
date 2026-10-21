@@ -1,0 +1,31 @@
+Change Log
+
+== RedbirdPy 0.5.0 (v2026, CODENAME_TBD), Qianqian Fang <q.fang at neu.edu> ==
+
+ 2026-10-21 [dc54b1d] [test] add Monte Carlo (pmmc, CPU) forward tests, add the [mc] extra, bump to 0.5.0
+ 2026-09-01 [3ba6f54] [doc] point cross-repo references at redbird, not redbird-m
+ 2026-09-01 [db7987f] [bug] fix addnoise shot-noise scaling and complex-data noise model
+ 2026-08-28 [ec02a46] [bug] use per-label Reff and l_tr when several media are exposed
+ 2026-08-27 [0bdd2e6] [format] apply black to test_meshprep_evol.py
+ 2026-08-27 [9d3a008] [solver] fix femsolve return shape, qmr preconditioner kwarg, complex minres
+ 2026-08-26 [7e99bd3] [speedup] locate source and detector optodes in one tsearchn call
+ 2026-08-26 [6dee4f4] [speedup] vectorize _femnz sparsity pattern in meshprep, 15x faster
+
+== RedbirdPy 0.4.2 (Summer Tanagers), Qianqian Fang <q.fang at neu.edu> ==
+
+ 2026-08-23 [7c66235] release 0.4.2
+ 2026-08-23 [ce63836] meshprep: store unsigned element volumes
+ 2026-06-20 [0eed57c] [feat] update README, describe TD forward, MC recon,MWT, bump 0.4.1
+ 2026-06-12 [b1da223] [release] bump version to 0.3.1 - Summer Tanagers
+ 2026-06-12 [d544f4a] [feat] support recon['isratio'] to accept ratiometric data, like fNIRS
+ 2026-05-21 [54dc915] [feat] mcxlab voxel-grid adjoint Jacobian + matrix-free LSQR recon
+ 2026-05-21 [8488408] [bug] port MC CW/RF recon fixes from redbird-m b289a56
+ 2026-05-14 [8590313] [feat] port missing MATLAB redbird utilities to redbirdpy, w/ Claude code
+ 2026-05-14 [278c4d5] [format] apply black 23.12.1 to MC integration files
+ 2026-05-14 [aafcda7] [release] bump redbirdpy to v0.3.0
+ 2026-05-14 [3dce6c5] [example] redbirdpy: Monte Carlo (pmmc) demos -- forward, Jacobian, recon, w/ Claude code
+ 2026-05-14 [0ee6000] [feat] redbirdpy MC integration: pmmc forward + adjoint Jacobian routed through runforward/runrecon, w/ Claude code
+ 2026-05-08 [2b1847b] [feat] port time-domain DOT (Crank-Nicolson) forward solver to redbirdpy
+ 2026-05-08 [97cccb1] [format] reformat code using black
+ 2026-05-08 [951385b] [feat] port MWT (Helmholtz + Bayliss-Turkel RBC) forward+inverse to redbirdpy
+ 2026-02-12 [1aa8f04] [solver] set blqmr fortran as the default solver in auto mode if installed

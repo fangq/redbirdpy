@@ -4,7 +4,7 @@
 
 * **Copyright**: (C) Qianqian Fang (2005–2026) \<q.fang at neu.edu>
 * **License**: GNU Public License V3 or later
-* **Version**: 0.4.2 (Summer Tanagers)
+* **Version**: 0.5.0 (v2026, CODENAME_TBD)
 * **GitHub**: [https://github.com/fangq/redbirdpy](https://github.com/fangq/redbirdpy)
 * **PyPI**: [https://pypi.org/project/redbirdpy](https://pypi.org/project/redbirdpy)
 * **Acknowledgement**: This project is supported by the US National Institute of Health (NIH)
@@ -14,6 +14,7 @@
 
 ## Table of Contents
 
+- [What's New](#whats-new)
 - [Introduction](#introduction)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
@@ -35,6 +36,24 @@
 - [References](#references)
 
 ---
+
+## What's New
+
+RedbirdPy v0.5.0 (v2026) is bundled with the MCX/MCX-CL/MMC v2026 (3.0) release. Since
+v0.2.0, it has gained
+
+* Monte Carlo forward solvers and adjoint Jacobians: setting `cfg["nphoton"]` routes
+  `runforward`/`runrecon` to `pmmc` (mesh) or `pmcx` (voxel grid, matrix-free LSQR
+  reconstruction); install both with `pip install redbirdpy[mc]`
+* microwave tomography (Helmholtz + Bayliss-Turkel RBC) and time-domain DOT
+  (Crank-Nicolson) forward solvers
+* ratiometric (fNIRS) reconstruction via `recon["isratio"]`
+* ports of the remaining MATLAB Redbird utilities
+* bug fixes in `addnoise`, `femsolve`, and per-label Reff/l_tr with multiple media, and
+  faster mesh preparation (vectorized sparsity pattern, 15x) and optode search
+* new MC forward tests (`test/test_forward_mc.py`) that run pmmc on the CPU
+
+The detailed updates can be found in [ChangeLog.txt](ChangeLog.txt).
 
 ## Introduction
 
@@ -86,7 +105,8 @@ pip install numba          # JIT compilation
 
 # For Monte Carlo forward/adjoint solvers
 pip install pmcx           # MCX voxel-grid Monte Carlo (GPU)
-pip install pmmc           # MMC mesh-based Monte Carlo (GPU)
+pip install pmmc           # MMC mesh-based Monte Carlo (GPU, or CPU with cfg['compute']='sse')
+# or both at once: pip install redbirdpy[mc]
 
 # For accelerated solvers
 pip install blocksolver  # or from https://github.com/fangq/blit
