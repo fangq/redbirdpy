@@ -1296,7 +1296,7 @@ if HAS_NUMBA:
         """Numba-accelerated Jacobian core computation."""
         nelem = elem_0.shape[0]
         nsd = len(src_cols)
-        Jmua_elem = np.zeros((nsd, nelem))
+        Jmua_elem = np.zeros((nsd, nelem), dtype=phi.dtype)  # complex for RF fields
 
         for isd in prange(nsd):
             src_col = src_cols[isd]
