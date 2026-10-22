@@ -494,9 +494,12 @@ def _runforward_mcx(
     out = _pmcx.run(cfg)
 
     # mcxlab raw flux layout: (Nx, Ny, Nz, Nt, Nsrc+Ndet) or with a singleton
-    # time axis squeezed.  Take time-bin 0 (CW).
+    # time axis squeezed.  Take time-bin 0 (CW).  pmcx multi-source runs may
+    # also return (Nx, Ny, Nz, Nt, 1, Nsrc); fold the extra singleton axis.
     phi = np.asarray(out["flux"])
-    if phi.ndim == 5:
+    if phi.ndim == 6:
+        phi = phi[:, :, :, 0, ...].reshape(phi.shape[:3] + (-1,))
+    elif phi.ndim == 5:
         phi = phi[:, :, :, 0, :]
     elif phi.ndim == 4 and phi.shape[3] == 1:
         phi = phi[:, :, :, 0]
