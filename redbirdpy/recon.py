@@ -12,6 +12,9 @@ Functions:
     reginvunder: Underdetermined least-squares solver
     matreform: Reformat matrix equation for different output forms
     prior: Generate structure-prior regularization matrices
+    regtv: Total-variation regularized least squares (FISTA)
+    binjac/upsample: Bin a voxel Jacobian onto a coarse grid / its adjoint
+    sdjac: Jacobian block for source-detector coupling estimation
 """
 
 __all__ = [
@@ -28,6 +31,10 @@ __all__ = [
     "regemperical",
     "jacop",
     "reglsqr",
+    "regtv",
+    "binjac",
+    "upsample",
+    "sdjac",
 ]
 
 import numpy as np
@@ -70,7 +77,23 @@ def runrecon(
     sd : ndarray or dict
         Source-detector mapping (0-based column indices into phi matrix)
     **kwargs : dict
-        Options: maxiter, lambda_, tol, reform, report, prior
+        Options: maxiter, lambda_, tol, reform, report, prior, and the
+        simultaneous source-detector coupling options below (each may also
+        be given as a recon key):
+
+        - sdcoupling: 'n' (off, default), 'y' (both roles), 's'
+          (source-only) or 'd' (detector-only); True maps to 'y'
+        - sdweight: extra weight of the coupling Jacobian columns (1)
+        - sdprior: if > 0, Tikhonov pull of the couplings toward 1+0i (0)
+        - sdfirst: fit only the couplings, freezing the image, during the
+          first N iterations (0)
+
+        Coupling estimation fits one complex coefficient per channel,
+        ``recon["sd"]`` (initialized to 1+0i), with
+        ``phi_hat(d, s) = c_s * c_d * phi(d, s)``; ``recon["sdindex"]`` maps
+        every optode (sources first, then detectors, 0-based) to a 0-based
+        channel (default: one channel per optode).  Requires reform 'real',
+        'reim' or 'logphase', complex (RF) data and the FEM Jacobian.
 
     Returns
     -------
@@ -97,8 +120,44 @@ def runrecon(
     if isinstance(rfcw, int):
         rfcw = [rfcw]
 
+    # simultaneous source-detector (SD) coupling coefficient estimation
+    # options, see rbrunrecon.m
+    sdmode = kwargs.get("sdcoupling", recon.get("sdcoupling", "n"))
+    if isinstance(sdmode, (bool, int, np.integer, np.bool_)):
+        sdmode = "y" if sdmode else "n"
+    sdweight = kwargs.get("sdweight", recon.get("sdweight", 1))
+    sdprior = kwargs.get("sdprior", recon.get("sdprior", 0))
+    sdfirst = kwargs.get("sdfirst", recon.get("sdfirst", 0))
+    dosd = sdmode in ("y", "s", "d")
+
     if sd is None:
         sd = sdmap(cfg)
+
+    # one complex coupling coefficient per channel, shared across
+    # wavelengths; recon["sdindex"] maps every optode (sources first, then
+    # detectors, the same 0-based order as the phi columns) to a channel
+    if dosd:
+        nsrctot = ndettot = 0
+        if cfg.get("srcpos") is not None and np.size(cfg["srcpos"]) > 0:
+            nsrctot += np.atleast_2d(cfg["srcpos"]).shape[0]
+        if cfg.get("detpos") is not None and np.size(cfg["detpos"]) > 0:
+            ndettot += np.atleast_2d(cfg["detpos"]).shape[0]
+        # widesrc/widedet are stored as (Nn x Npattern) in redbirdpy
+        if cfg.get("widesrc") is not None and np.size(cfg["widesrc"]) > 0:
+            nsrctot += np.asarray(cfg["widesrc"]).shape[1]
+        if cfg.get("widedet") is not None and np.size(cfg["widedet"]) > 0:
+            ndettot += np.asarray(cfg["widedet"]).shape[1]
+        if recon.get("sdindex") is None or np.size(recon["sdindex"]) == 0:
+            recon["sdindex"] = np.arange(nsrctot + ndettot)
+        recon["sdindex"] = np.asarray(recon["sdindex"], dtype=int).ravel()
+        if recon["sdindex"].size != nsrctot + ndettot:
+            raise ValueError(
+                f"recon['sdindex'] must have one entry per optode "
+                f"({nsrctot} sources + {ndettot} detectors)"
+            )
+        if recon.get("sd") is None or np.size(recon["sd"]) == 0:
+            recon["sd"] = np.ones(int(recon["sdindex"].max()) + 1, dtype=complex)
+        recon["sd"] = np.asarray(recon["sd"], dtype=complex).ravel()
 
     # Normalize recon["prop"] to always be 2D
     if "prop" in recon:
@@ -180,6 +239,47 @@ def runrecon(
                     detphi0[wv] = np.asarray(detphi0[wv]) * np.asarray(model)
             else:
                 detphi0 = np.asarray(detphi0) * np.asarray(detphi)
+
+        # simultaneous SD coupling estimation: scale the model prediction and
+        # the forward/adjoint field columns by the current per-optode coupling
+        # factors, so that the misfit AND the property Jacobians (built from
+        # phi by jac) describe the model phi_hat(d, s) = c_s * c_d * phi(d, s)
+        if dosd:
+            if Jext is not None:
+                raise ValueError(
+                    "sdcoupling is not supported with Monte Carlo (Jext) Jacobians"
+                )
+            sdfac = recon["sd"][recon["sdindex"]]
+            srcfac = sdfac[:nsrctot]
+            detfac = sdfac[nsrctot:]
+            sdouter = np.outer(detfac, srcfac)
+
+            def _scale_detphi(d):
+                d = np.asarray(d)
+                if d.shape != sdouter.shape:
+                    raise ValueError(
+                        "sdcoupling does not yet support multi-modality (rfcw) "
+                        "forward outputs"
+                    )
+                return d * sdouter
+
+            def _scale_phi(p):
+                p = np.asarray(p)
+                if p.ndim != 2 or p.shape[1] != sdfac.size:
+                    raise ValueError(
+                        "sdcoupling does not yet support multi-modality (rfcw) "
+                        "forward outputs"
+                    )
+                return p * sdfac[np.newaxis, :]
+
+            if isinstance(detphi, dict):
+                detphi = {wv: _scale_detphi(v) for wv, v in detphi.items()}
+            else:
+                detphi = _scale_detphi(detphi)
+            if isinstance(phi, dict):
+                phi = {wv: _scale_phi(v) for wv, v in phi.items()}
+            else:
+                phi = _scale_phi(phi)
 
         # ---- voxel-grid (mcxlab/pmcx) Jacobian: route through LSQR -------
         # When runforward's mcxlab/pmcx branch returned Jext['mua'] as a 4D
@@ -349,10 +449,83 @@ def runrecon(
         blockscale = 1.0 / np.sqrt(np.sum(Jflat**2))
         Jflat = Jflat * blockscale
 
+        # append the SD coupling Jacobian block (see sdjac); its columns are
+        # [Re(dc) (or d|c|), Im(dc) (or d angle(c))], Frobenius-normalized and
+        # weighted by sdweight; sdprior appends Tikhonov rows pulling the
+        # coefficients toward 1+0i
+        if dosd:
+            if reform == "complex":
+                raise ValueError(
+                    "sdcoupling requires reform set to 'real', 'reim' or 'logphase'"
+                )
+            Asd, _, _ = sdjac(
+                sd,
+                detphi_flat,
+                recon["sd"],
+                recon["sdindex"],
+                reform,
+                sdmode,
+                rfcw,
+                wavelengths,
+            )
+            if Asd.shape[0] != Jflat.shape[0]:
+                raise ValueError(
+                    f"sdcoupling: SD block rows ({Asd.shape[0]}) do not match the "
+                    f"reformed system rows ({Jflat.shape[0]}); CW-only (real) data "
+                    "is not supported"
+                )
+            nsdhalf = Asd.shape[1] // 2
+            if sdprior > 0:
+                if reform == "logphase":
+                    sdtarget = np.concatenate(
+                        [1 - np.abs(recon["sd"]), -np.angle(recon["sd"])]
+                    )
+                else:
+                    sdtarget = np.concatenate([1 - recon["sd"].real, -recon["sd"].imag])
+                Jflat = np.vstack([Jflat, np.zeros((2 * nsdhalf, Jflat.shape[1]))])
+                Asd = np.vstack([Asd, sdprior * np.eye(2 * nsdhalf)])
+                misfit = np.concatenate([misfit, sdprior * sdtarget])
+            sdscalefact = np.array(
+                [
+                    sdweight / np.linalg.norm(Asd[:, :nsdhalf]),
+                    sdweight / np.linalg.norm(Asd[:, nsdhalf:]),
+                ]
+            )
+            sdscalefact[~np.isfinite(sdscalefact)] = 1
+            if iteration < sdfirst:
+                Jflat = Jflat * 0  # coupling-only fit: freeze the image unknowns
+            Jflat = np.hstack(
+                [
+                    Jflat,
+                    Asd[:, :nsdhalf] * sdscalefact[0],
+                    Asd[:, nsdhalf:] * sdscalefact[1],
+                ]
+            )
+
         # Solve inverse problem
         dmu = reginv(
             Jflat, misfit, lambda_, Aregu, blocks, method=solvermethod, **solverflag
         )
+
+        # extract and apply the SD coupling update: additive in the complex
+        # form, or in log-magnitude/phase; amplitudes are floored at 0.05 as in
+        # Redbird90, then the mean is re-pinned at 1+0i to remove the global
+        # scale ambiguity between the couplings and the image
+        if dosd:
+            dsd = dmu[-2 * nsdhalf :].copy()
+            dmu = dmu[: -2 * nsdhalf]
+            dsd[:nsdhalf] *= sdscalefact[0]
+            dsd[nsdhalf:] *= sdscalefact[1]
+            if reform == "logphase":
+                sdamp = np.maximum(np.abs(recon["sd"]) + dsd[:nsdhalf], 0.05)
+                sdpha = np.angle(recon["sd"]) + dsd[nsdhalf:]
+                recon["sd"] = sdamp * np.exp(1j * sdpha)
+            else:
+                recon["sd"] = recon["sd"] + (dsd[:nsdhalf] + 1j * dsd[nsdhalf:])
+                sdneg = recon["sd"].real < 0
+                recon["sd"][sdneg] = 0.05 + 1j * recon["sd"][sdneg].imag
+            recon["sd"] = recon["sd"] - np.mean(recon["sd"]) + 1
+
         dmu = dmu * blockscale
 
         # Parse update and apply to recon structure
@@ -428,6 +601,8 @@ def runrecon(
                     # Node/element based: param has one value per node
                     target["param"][key] = param_val + dx
 
+        if dosd:
+            update["sd"] = recon["sd"].copy()
         updates.append(update)
 
         if report:
@@ -611,6 +786,425 @@ def reglsqr(
         delta_mu = x
 
     return delta_mu, info
+
+
+def regtv(
+    J,
+    r: np.ndarray,
+    alpha: float,
+    maxit: int = 100,
+    innerit: int = 10,
+    tol: float = 1e-5,
+    L: float = None,
+    reshape3d: bool = True,
+    adjointtest: bool = True,
+    verbose: bool = False,
+    positive: bool = False,
+    dims3: tuple = None,
+) -> Tuple[np.ndarray, dict]:
+    """Total-variation regularized least squares via FISTA.
+
+    Port of redbird/matlab/rbregtv.m.  Solves
+
+        min_x  0.5 * ||J x - r||_2^2  +  alpha * TV_iso(x)
+
+    where TV_iso is the isotropic 3D total-variation seminorm, using
+    Beck & Teboulle (2009) FISTA: each outer step takes a gradient step on
+    the data-fit term, then applies the TV proximal operator, solved by
+    ``innerit`` iterations of Chambolle's (2004) projected-gradient method.
+    TV favours piecewise-constant images and preserves compact inclusions
+    better than the minimum-norm `reglsqr`.
+
+    Parameters
+    ----------
+    J : ndarray, LinearOperator or dict
+        A 4D voxel Jacobian ``(Nx, Ny, Nz, Nsd)``, a LinearOperator of shape
+        ``(Nsd, Nv)`` (then ``dims3`` is required), or a dict with key "mua".
+    r : ndarray, shape (Nsd,)
+        Measurement residual.
+    alpha : float
+        TV regularization weight (>= 0).
+    maxit, innerit, tol : optional
+        Outer FISTA iterations (100), inner Chambolle iterations (10), and
+        the relative-change stopping tolerance (1e-5).
+    L : float, optional
+        Lipschitz constant of J^T J; estimated by power iteration if None.
+    reshape3d : bool, optional
+        Return ``(Nx, Ny, Nz)`` for a 4D/dict J (default True).
+    adjointtest : bool, optional
+        Run a one-shot dot-product test of the operator (default True).
+    verbose : bool, optional
+        Print per-iteration progress.
+    positive : bool, optional
+        Project x >= 0 after each proximal step (default False).
+    dims3 : tuple, optional
+        Volume shape ``(Nx, Ny, Nz)`` when J is a LinearOperator.
+
+    Returns
+    -------
+    delta_mu : ndarray
+        The voxel update, ``(Nx, Ny, Nz)`` or a flat vector.
+    info : dict
+        ``iter``, ``L``, ``obj`` (objective history), ``relchg``,
+        ``adjoint_err``.
+    """
+    from scipy.sparse.linalg import LinearOperator
+
+    input_was_4d = False
+    if isinstance(J, dict) and "mua" in J:
+        J = np.asarray(J["mua"])
+    if isinstance(J, np.ndarray) and J.ndim == 4:
+        dims3 = J.shape[:3]
+        op = jacop(J)
+        input_was_4d = True
+    elif isinstance(J, LinearOperator) or hasattr(J, "matvec"):
+        op = J
+        if dims3 is None:
+            raise ValueError(
+                "regtv: when J is a LinearOperator, pass dims3=(Nx, Ny, Nz) so "
+                "the TV operators know the volume shape"
+            )
+    else:
+        raise TypeError(
+            "regtv: J must be a 4D ndarray, a LinearOperator, or a dict with key 'mua'"
+        )
+
+    dims3 = tuple(int(d) for d in dims3)
+    Nsd, Nv = int(op.shape[0]), int(op.shape[1])
+    if int(np.prod(dims3)) != Nv:
+        raise ValueError(f"regtv: dims3 {dims3} does not match Nv = {Nv}")
+
+    rng = np.random.default_rng()
+    adjoint_err = float("nan")
+    if adjointtest:
+        v_probe = rng.standard_normal(Nv)
+        u_probe = rng.standard_normal(Nsd)
+        lhs = float(u_probe @ op.matvec(v_probe))
+        rhs = float(op.rmatvec(u_probe) @ v_probe)
+        adjoint_err = abs(lhs - rhs) / max(abs(lhs), np.finfo(float).eps)
+        if adjoint_err > 1e-4:
+            warnings.warn(
+                f"regtv: adjoint dot-product test failed: rel err = {adjoint_err:.3e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    if L is None:
+        L = _power_iter_jtj(op, Nv, 10, rng) * 1.05  # small safety factor
+
+    r_col = np.asarray(r, dtype=float).ravel()
+    x_prev = np.zeros(Nv)
+    x_new = x_prev
+    y = np.zeros(Nv)
+    t = 1.0
+    obj_hist = np.zeros(maxit)
+    relchg_hist = np.zeros(maxit)
+
+    k = 0
+    for k in range(maxit):
+        # gradient step on the data-fit term at y
+        Jy = op.matvec(y)
+        grad = op.rmatvec(Jy - r_col)
+        z = y - grad / L
+
+        # proximal step: 3D TV denoising of z, optionally x >= 0
+        x_new3 = _tv_prox_iso3d(z.reshape(dims3), alpha / L, innerit)
+        if positive:
+            x_new3 = np.maximum(x_new3, 0)
+        x_new = x_new3.ravel()
+
+        # FISTA acceleration
+        t_new = 0.5 * (1 + np.sqrt(1 + 4 * t * t))
+        y = x_new + ((t - 1) / t_new) * (x_new - x_prev)
+
+        res = Jy - r_col
+        obj_hist[k] = 0.5 * float(res @ res) + alpha * _tv_iso3d_value(x_new3)
+        relchg_hist[k] = np.linalg.norm(x_new - x_prev) / max(
+            np.linalg.norm(x_prev), np.finfo(float).eps
+        )
+
+        if verbose and (k < 5 or (k + 1) % 10 == 0 or k == maxit - 1):
+            print(
+                f"  FISTA iter {k + 1:3d}:  obj={obj_hist[k]:.4e}   relchg={relchg_hist[k]:.3e}"
+            )
+
+        if k > 0 and relchg_hist[k] < tol:
+            break
+
+        x_prev = x_new
+        t = t_new
+
+    niter = k + 1
+    info = {
+        "iter": niter,
+        "L": float(L),
+        "obj": obj_hist[:niter],
+        "relchg": relchg_hist[:niter],
+        "adjoint_err": adjoint_err,
+    }
+
+    if input_was_4d and reshape3d:
+        return x_new.reshape(dims3), info
+    return x_new, info
+
+
+def _power_iter_jtj(op, Nv: int, niter: int, rng) -> float:
+    """Estimate ||J^T J||_2 by power iteration (see rbregtv.m)."""
+    v = rng.standard_normal(Nv)
+    v = v / np.linalg.norm(v)
+    for _ in range(niter):
+        v = op.rmatvec(op.matvec(v))
+        nrm = np.linalg.norm(v)
+        if nrm < np.finfo(float).eps:
+            return 0.0
+        v = v / nrm
+    w = op.matvec(v)
+    return float(w @ w)
+
+
+def _tv_prox_iso3d(z: np.ndarray, lam: float, niter: int) -> np.ndarray:
+    """Chambolle's projected gradient for argmin_u 0.5||u-z||^2 + lam*TV_iso(u)."""
+    if lam <= 0:  # no TV penalty: the proximal operator is the identity
+        return z
+    p1 = np.zeros_like(z)
+    p2 = np.zeros_like(z)
+    p3 = np.zeros_like(z)
+    tau = 1.0 / 12.0  # ||D||_2^2 <= 12 for 3D forward differences
+
+    for _ in range(niter):
+        g1, g2, g3 = _grad3d(_div3d(p1, p2, p3) - z / lam)
+        p1 = p1 + tau * g1
+        p2 = p2 + tau * g2
+        p3 = p3 + tau * g3
+        # project onto the isotropic unit ball per voxel
+        nrm = np.maximum(np.sqrt(p1 * p1 + p2 * p2 + p3 * p3), 1.0)
+        p1 = p1 / nrm
+        p2 = p2 / nrm
+        p3 = p3 / nrm
+
+    return z - lam * _div3d(p1, p2, p3)
+
+
+def _tv_iso3d_value(x: np.ndarray) -> float:
+    """Isotropic 3D TV value."""
+    g1, g2, g3 = _grad3d(x)
+    return float(np.sum(np.sqrt(g1 * g1 + g2 * g2 + g3 * g3)))
+
+
+def _grad3d(x: np.ndarray):
+    """Forward differences with a zero difference at the last voxel of each axis."""
+    g1 = np.zeros_like(x)
+    g2 = np.zeros_like(x)
+    g3 = np.zeros_like(x)
+    g1[:-1, :, :] = x[1:, :, :] - x[:-1, :, :]
+    g2[:, :-1, :] = x[:, 1:, :] - x[:, :-1, :]
+    g3[:, :, :-1] = x[:, :, 1:] - x[:, :, :-1]
+    return g1, g2, g3
+
+
+def _div3d(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> np.ndarray:
+    """Discrete divergence, the negative adjoint of _grad3d."""
+    d1 = np.zeros_like(p1)
+    d2 = np.zeros_like(p2)
+    d3 = np.zeros_like(p3)
+    d1[1:-1, :, :] = p1[1:-1, :, :] - p1[:-2, :, :]
+    d1[0, :, :] = p1[0, :, :]
+    d1[-1, :, :] = -p1[-2, :, :]
+    d2[:, 1:-1, :] = p2[:, 1:-1, :] - p2[:, :-2, :]
+    d2[:, 0, :] = p2[:, 0, :]
+    d2[:, -1, :] = -p2[:, -2, :]
+    d3[:, :, 1:-1] = p3[:, :, 1:-1] - p3[:, :, :-2]
+    d3[:, :, 0] = p3[:, :, 0]
+    d3[:, :, -1] = -p3[:, :, -2]
+    return d1 + d2 + d3
+
+
+def binjac(J: np.ndarray, binsize) -> np.ndarray:
+    """Bin a 4D fine-grid voxel Jacobian onto a coarse grid.
+
+    Port of redbird/matlab/rbbinjac.m.  Fine-voxel columns are SUMMED within
+    each ``binsize`` block, i.e. ``J_c = J_fine * U`` with ``U`` the
+    replication operator implemented by `upsample`, so a coarse unknown
+    ``x_c`` predicts the same data as its upsampled fine field.  The grid is
+    zero-padded up to a multiple of ``binsize`` when needed.
+
+    Parameters
+    ----------
+    J : ndarray, shape (Nx, Ny, Nz, Nsd)
+        Fine-grid voxel Jacobian.
+    binsize : int or sequence of 3 ints
+        Block size along x, y, z.
+
+    Returns
+    -------
+    J_c : ndarray, shape (ceil(Nx/bx), ceil(Ny/by), ceil(Nz/bz), Nsd)
+    """
+    J = np.asarray(J)
+    if J.ndim != 4:
+        raise ValueError("binjac: J must be a 4D array (Nx, Ny, Nz, Nsd)")
+    bx, by, bz = _binsize3(binsize, "binjac")
+    Nx, Ny, Nz, Nsd = J.shape
+    Nxc, Nyc, Nzc = -(-Nx // bx), -(-Ny // by), -(-Nz // bz)
+
+    if (Nxc * bx, Nyc * by, Nzc * bz) != (Nx, Ny, Nz):
+        J_pad = np.zeros((Nxc * bx, Nyc * by, Nzc * bz, Nsd), dtype=J.dtype)
+        J_pad[:Nx, :Ny, :Nz, :] = J
+    else:
+        J_pad = J
+
+    return J_pad.reshape(Nxc, bx, Nyc, by, Nzc, bz, Nsd).sum(axis=(1, 3, 5))
+
+
+def upsample(x_coarse: np.ndarray, binsize, fine_dims=None) -> np.ndarray:
+    """Upsample a 3D coarse field to a fine grid by replication.
+
+    Port of redbird/matlab/rbupsample.m, the adjoint of the binning in
+    `binjac`: each coarse voxel is copied to the ``binsize`` block it
+    covers, then the result is cropped to ``fine_dims`` if given.
+
+    Parameters
+    ----------
+    x_coarse : ndarray, shape (Nxc, Nyc, Nzc)
+    binsize : int or sequence of 3 ints
+    fine_dims : sequence of 3 ints, optional
+        Fine-grid shape to crop to (e.g. the unpadded Jacobian grid).
+
+    Returns
+    -------
+    x_fine : ndarray
+    """
+    bx, by, bz = _binsize3(binsize, "upsample")
+    x_fine = np.repeat(np.repeat(np.repeat(np.asarray(x_coarse), bx, 0), by, 1), bz, 2)
+    if fine_dims is not None:
+        fine_dims = tuple(int(d) for d in fine_dims[:3])
+        if any(s < f for s, f in zip(x_fine.shape[:3], fine_dims)):
+            raise ValueError(
+                "upsample: upsampled shape is smaller than requested fine_dims"
+            )
+        x_fine = x_fine[: fine_dims[0], : fine_dims[1], : fine_dims[2]]
+    return x_fine
+
+
+def _binsize3(binsize, caller: str) -> Tuple[int, int, int]:
+    """Expand a scalar bin size to 3 positive integers."""
+    b = np.atleast_1d(np.asarray(binsize)).ravel()
+    if b.size == 1:
+        b = np.repeat(b, 3)
+    if b.size != 3 or np.any(b < 1) or np.any(b != np.round(b)):
+        raise ValueError(f"{caller}: binsize must be a positive integer or 3-vector")
+    return int(b[0]), int(b[1]), int(b[2])
+
+
+def sdjac(
+    sd: Union[np.ndarray, dict],
+    detphiflat: np.ndarray,
+    csd: np.ndarray,
+    sdindex: np.ndarray,
+    reform: str = "real",
+    sdmode: str = "y",
+    rfcw: Union[int, List[int]] = 1,
+    wavelengths: List = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Jacobian block for simultaneous source-detector coupling estimation.
+
+    Port of redbird/matlab/rbsdjac.m.  The measurement model is
+
+        phi_hat(i, j) = csd[srcch(i)] * csd[detch(j)] * phi(i, j)
+
+    so the complex Jacobian entry for coupling channel ``ch`` is
+    ``model / csd[ch]`` for each of the two roles (source and detector) of
+    every measurement (Fang 2004, Redbird90 rb2_inversion.f90).
+
+    Parameters
+    ----------
+    sd : ndarray or dict
+        Source-detector table(s) as returned by `sdmap`: columns
+        ``[src_col, det_col, active, mode]`` with 0-based phi column indices
+        (sources first, then detectors).  Its active rows must follow the
+        order of ``detphiflat``.
+    detphiflat : ndarray
+        Flattened complex model prediction (already scaled by the current
+        couplings), one entry per active measurement, concatenated over
+        ``wavelengths``.
+    csd : ndarray
+        Current complex coupling coefficients, one per channel.
+    sdindex : ndarray of int
+        0-based coupling channel of every optode (sources first, then
+        detectors, the same indices as sd columns 0-1); give a source and a
+        detector the same channel when they are one physical optode.
+    reform : str
+        'real'/'reim' for the expanded complex form (unknowns Re(dc), Im(dc))
+        or 'logphase' for the log-amplitude/phase form (unknowns d|c|,
+        d angle(c)).
+    sdmode : str
+        'y' both roles (default), 's' source-only, 'd' detector-only.
+    rfcw : int or list
+        Source modality kept from a 4-column sd table (default 1).
+    wavelengths : list, optional
+        Keys of ``sd`` (when a dict) in the order used to flatten the data.
+
+    Returns
+    -------
+    Asd : ndarray, shape (2*Nmeas, 2*Nch)
+        Real Jacobian block; the first Nch columns are Re(dc) (or d|c|), the
+        last Nch columns Im(dc) (or d angle(c)).
+    srcch, detch : ndarray
+        Per-measurement source and detector coupling channels.
+    """
+    csd = np.asarray(csd).ravel()
+    sdindex = np.asarray(sdindex, dtype=int).ravel()
+    nch = int(sdindex.max()) + 1
+    modes = list(np.atleast_1d(rfcw)) + [3]
+
+    if isinstance(sd, dict):
+        keys = list(sd.keys()) if wavelengths is None else list(wavelengths)
+        tables = [sd[k] for k in keys]
+    else:
+        tables = [sd] * (1 if wavelengths is None else len(wavelengths))
+
+    srcch, detch = [], []
+    for sdwv in tables:
+        sdwv = np.atleast_2d(np.asarray(sdwv))
+        if sdwv.shape[1] > 3:
+            sdwv = sdwv[np.isin(sdwv[:, 3], modes)]
+        kept = sdwv[:, 2] == 1 if sdwv.shape[1] > 2 else np.ones(len(sdwv), bool)
+        srcch.append(sdindex[sdwv[kept, 0].astype(int)])
+        detch.append(sdindex[sdwv[kept, 1].astype(int)])
+    srcch = np.concatenate(srcch)
+    detch = np.concatenate(detch)
+
+    detphiflat = np.asarray(detphiflat).ravel()
+    nrows = detphiflat.size
+    if srcch.size != nrows:
+        raise ValueError(
+            f"sd table rows ({srcch.size}) do not match the flattened data length ({nrows})"
+        )
+
+    fitsrc = sdmode in ("y", "s")
+    fitdet = sdmode in ("y", "d")
+    rows = np.arange(nrows)
+
+    if reform == "logphase":
+        # d(log|phi_hat|)/d|c| = 1/|c|, d(angle(phi_hat))/d(angle(c)) = 1
+        Alog = np.zeros((nrows, nch))
+        Apha = np.zeros((nrows, nch))
+        if fitsrc:
+            Alog[rows, srcch] = 1.0 / np.abs(csd[srcch])
+            Apha[rows, srcch] = 1.0
+        if fitdet:
+            Alog[rows, detch] += 1.0 / np.abs(csd[detch])
+            Apha[rows, detch] += 1.0
+        Z = np.zeros((nrows, nch))
+        return np.block([[Alog, Z], [Z, Apha]]), srcch, detch
+
+    # complex form J(:,ch) = model/csd(ch), expanded as [Re -Im; Im Re]
+    Jsd = np.zeros((nrows, nch), dtype=complex)
+    if fitsrc:
+        Jsd[rows, srcch] = detphiflat / csd[srcch]
+    if fitdet:
+        Jsd[rows, detch] += detphiflat / csd[detch]
+    Asd = np.block([[Jsd.real, -Jsd.imag], [Jsd.imag, Jsd.real]])
+    return Asd, srcch, detch
 
 
 def reginv(
