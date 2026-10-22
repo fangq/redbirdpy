@@ -52,6 +52,8 @@ v0.2.0, it has gained
   (`regtv`, FISTA) and coarse-basis Jacobian binning (`binjac`/`upsample`), ported from
   Redbird MATLAB
 * ports of the remaining MATLAB Redbird utilities
+* the Monte Carlo (pmcx/pmmc) Jacobian columns are now ordered like `detphi.ravel()`;
+  they were mismatched with the measurements when several sources and detectors were used
 * bug fixes in `addnoise`, `femsolve`, and per-label Reff/l_tr with multiple media, and
   faster mesh preparation (vectorized sparsity pattern, 15x) and optode search
 * new MC forward tests (`test/test_forward_mc.py`) that run pmmc on the CPU
@@ -67,7 +69,7 @@ Redbird is the result of over two decades of active research in DOT and image re
 ### Key Features
 
 - **Forward Modeling**: Solve the diffusion equation for photon fluence using FEM
-- **Monte Carlo Forward/Adjoint**: Drop-in `pmcx` (voxel-grid) and `pmmc` (mesh) Monte Carlo solvers with replay-based adjoint Jacobians, routed through the same API
+- **Monte Carlo Forward/Adjoint**: Drop-in `pmcx` (voxel-grid) and `pmmc` (mesh) Monte Carlo solvers with adjoint-method Jacobians, routed through the same API
 - **Microwave Tomography (MWT)**: FEM Helmholtz solver with a first-order Bayliss-Turkel radiating boundary condition for permittivity/conductivity reconstruction
 - **Inverse Reconstruction**: Iterative Gauss-Newton with Tikhonov regularization, plus a matrix-free LSQR path for large voxel-grid problems
 - **Continuous-Wave, Frequency-Domain, and Time-Domain**: CW, amplitude-modulated (RF), and Crank-Nicolson time-domain (TPSF) forward solvers
@@ -107,7 +109,7 @@ pip install iso2mesh  # or from https://github.com/NeuroJSON/pyiso2mesh
 pip install numba          # JIT compilation
 
 # For Monte Carlo forward/adjoint solvers
-pip install pmcx           # MCX voxel-grid Monte Carlo (GPU)
+pip install pmcx           # MCX voxel-grid Monte Carlo (NVIDIA GPU; utilities only on macOS)
 pip install pmmc           # MMC mesh-based Monte Carlo (GPU, or CPU with cfg['compute']='sse')
 # or both at once: pip install redbirdpy[mc]
 
