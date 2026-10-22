@@ -48,6 +48,9 @@ v0.2.0, it has gained
 * microwave tomography (Helmholtz + Bayliss-Turkel RBC) and time-domain DOT
   (Crank-Nicolson) forward solvers
 * ratiometric (fNIRS) reconstruction via `recon["isratio"]`
+* source/detector coupling estimation (`sdcoupling`), total-variation regularization
+  (`regtv`, FISTA) and coarse-basis Jacobian binning (`binjac`/`upsample`), ported from
+  Redbird MATLAB
 * ports of the remaining MATLAB Redbird utilities
 * bug fixes in `addnoise`, `femsolve`, and per-label Reff/l_tr with multiple media, and
   faster mesh preparation (vectorized sparsity pattern, 15x) and optode search
@@ -215,6 +218,10 @@ Redbird supports four types of image reconstructions:
 | `reginvunder(A, b, lambda)` | Underdetermined system solver |
 | `reglsqr(J, r, maxit, tol)` | Matrix-free LSQR for large voxel-grid Jacobians |
 | `jacop(J)` | Wrap a 4-D voxel-grid Jacobian as a SciPy `LinearOperator` |
+| `regtv(J, r, alpha)` | Isotropic 3-D total-variation regularized solve (FISTA + Chambolle prox) |
+| `binjac(J, binsize)` | Sum a 4-D voxel Jacobian into coarse `binsize`^3 blocks |
+| `upsample(x, binsize, dims)` | Replicate a coarse-grid update back to the fine grid (adjoint of `binjac`) |
+| `sdjac(sd, detphi, csd, sdindex)` | Jacobian of the measurements w.r.t. per-optode coupling coefficients |
 | `matreform(A, ymeas, ymodel, form)` | Matrix reformulation (real/complex/logphase) |
 | `multispectral(...)` | Assemble multi-wavelength data into a single linear system |
 | `createinv(...)` | Reformulate the inverse problem (complex/real/log-phase) |
@@ -336,6 +343,9 @@ The forward solver uses a dictionary with the following fields:
 | `mapweight` | (Nn, 4) float | Barycentric interpolation weights |
 | `seg` | array | Segmentation labels for priors |
 | `isratio` | bool | Treat `data` as ratiometric (I/I₀) measurements, e.g. fNIRS |
+| `sdcoupling` | bool/str | Jointly estimate complex optode coupling factors (`'y'` all, `'s'` sources, `'d'` detectors); FEM RF data |
+| `sdindex` | (Nsrc+Ndet, ) int | Optional coupling-group index per optode (0-based); tied optodes share one factor |
+| `sd` | (Ncoupling, ) complex | Initial/recovered coupling factors, mean pinned at 1 |
 
 ---
 
