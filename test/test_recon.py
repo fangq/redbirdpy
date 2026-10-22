@@ -926,5 +926,251 @@ class TestFlattenDetphi(unittest.TestCase):
         self.assertEqual(len(result), 3)
 
 
+class TestBinjacUpsample(unittest.TestCase):
+    """Test recon.binjac and recon.upsample (ports of rbbinjac/rbupsample)."""
+
+    def test_binjac_sums_blocks(self):
+        """Each coarse column is the sum of its fine-voxel block."""
+        J = np.arange(4 * 4 * 2 * 3, dtype=float).reshape(4, 4, 2, 3)
+        Jc = recon.binjac(J, 2)
+        self.assertEqual(Jc.shape, (2, 2, 1, 3))
+        assert_allclose(Jc[1, 0, 0, :], J[2:4, 0:2, 0:2, :].sum(axis=(0, 1, 2)))
+
+    def test_binjac_pads_uneven_grid(self):
+        """A grid that is not a multiple of binsize is zero-padded."""
+        J = np.random.rand(7, 5, 6, 4)
+        Jc = recon.binjac(J, [2, 3, 2])
+        self.assertEqual(Jc.shape, (4, 2, 3, 4))
+        assert_allclose(Jc.sum(axis=(0, 1, 2)), J.sum(axis=(0, 1, 2)))
+        assert_allclose(Jc[3, 1, 2, :], J[6, 3:5, 4:6, :].sum(axis=(0, 1)))
+
+    def test_upsample_replicates_and_crops(self):
+        """upsample copies each coarse voxel to its block and crops."""
+        xc = np.arange(8, dtype=float).reshape(2, 2, 2)
+        xf = recon.upsample(xc, 2)
+        self.assertEqual(xf.shape, (4, 4, 4))
+        assert_allclose(xf[2:4, 0:2, 2:4], xc[1, 0, 1])
+        self.assertEqual(recon.upsample(xc, [2, 3, 2], [3, 5, 4]).shape, (3, 5, 4))
+        with self.assertRaises(ValueError):
+            recon.upsample(xc, 2, [5, 4, 4])
+
+    def test_binning_is_adjoint_of_upsampling(self):
+        """J_c @ x_c equals J_fine @ upsample(x_c): binning is J*U."""
+        J = np.random.rand(7, 5, 6, 4)
+        xc = np.random.rand(4, 2, 3)
+        lhs = np.einsum("ijkm,ijk->m", recon.binjac(J, [2, 3, 2]), xc)
+        rhs = np.einsum("ijkm,ijk->m", J, recon.upsample(xc, [2, 3, 2], J.shape[:3]))
+        assert_allclose(lhs, rhs)
+
+    def test_invalid_binsize(self):
+        with self.assertRaises(ValueError):
+            recon.binjac(np.zeros((2, 2, 2, 1)), 0)
+        with self.assertRaises(ValueError):
+            recon.binjac(np.zeros((2, 2, 2)), 2)
+
+
+class TestRegtv(unittest.TestCase):
+    """Test recon.regtv (port of rbregtv)."""
+
+    def setUp(self):
+        rng = np.random.default_rng(5)
+        self.J = rng.standard_normal((4, 3, 3, 60))
+        self.x = np.zeros((4, 3, 3))
+        self.x[1:3, 1:, 1:] = 1.0  # piecewise-constant inclusion
+        self.r = np.einsum("ijkm,ijk->m", self.J, self.x)
+
+    def test_zero_alpha_is_least_squares(self):
+        """With alpha = 0 FISTA converges to the least-squares solution."""
+        xtv, info = recon.regtv(
+            self.J, self.r, 0.0, maxit=3000, tol=1e-12, adjointtest=False
+        )
+        self.assertEqual(xtv.shape, (4, 3, 3))
+        assert_allclose(xtv, self.x, atol=1e-4)
+
+    def test_objective_decreases_and_info(self):
+        xtv, info = recon.regtv(self.J, self.r, 1.0, maxit=50, tol=0)
+        self.assertEqual(info["iter"], 50)
+        self.assertLess(info["obj"][-1], info["obj"][0])
+        self.assertLess(info["adjoint_err"], 1e-8)
+
+    def test_positive_and_flat_output(self):
+        xtv, _ = recon.regtv(
+            self.J, -self.r, 0.1, maxit=30, positive=True, reshape3d=False
+        )
+        self.assertEqual(xtv.shape, (36,))
+        self.assertGreaterEqual(xtv.min(), 0.0)
+
+    def test_linear_operator_needs_dims3(self):
+        op = recon.jacop(self.J)
+        with self.assertRaises(ValueError):
+            recon.regtv(op, self.r, 0.1)
+        xtv, _ = recon.regtv(op, self.r, 0.1, maxit=5, dims3=(4, 3, 3))
+        self.assertEqual(xtv.shape, (36,))
+
+
+class TestSdjac(unittest.TestCase):
+    """Test recon.sdjac (port of rbsdjac)."""
+
+    def setUp(self):
+        # 2 sources (optodes 0-1), 2 detectors (optodes 2-3), detector-major
+        # rows like sdmap; row 1 is inactive
+        self.sd = np.array(
+            [[0, 2, 1, 1], [1, 2, 0, 1], [0, 3, 1, 1], [1, 3, 1, 1]], dtype=float
+        )
+        self.phi = np.array([1 + 1j, 2 - 1j, 0.5 + 0.5j])
+        self.csd = np.array([1.0 + 0.1j, 0.9, 1.2 - 0.2j, 0.8 + 0.3j])
+        self.sdindex = np.array([0, 1, 2, 3])
+
+    def test_complex_form(self):
+        A, srcch, detch = recon.sdjac(self.sd, self.phi, self.csd, self.sdindex, "real")
+        assert_array_almost_equal(srcch, [0, 0, 1])
+        assert_array_almost_equal(detch, [2, 3, 3])
+        self.assertEqual(A.shape, (6, 8))
+        Jsd = np.zeros((3, 4), dtype=complex)
+        for i in range(3):
+            Jsd[i, srcch[i]] += self.phi[i] / self.csd[srcch[i]]
+            Jsd[i, detch[i]] += self.phi[i] / self.csd[detch[i]]
+        assert_allclose(A, np.block([[Jsd.real, -Jsd.imag], [Jsd.imag, Jsd.real]]))
+
+    def test_source_and_detector_only(self):
+        As, _, _ = recon.sdjac(self.sd, self.phi, self.csd, self.sdindex, "real", "s")
+        Ad, _, _ = recon.sdjac(self.sd, self.phi, self.csd, self.sdindex, "real", "d")
+        Ay, _, _ = recon.sdjac(self.sd, self.phi, self.csd, self.sdindex, "real", "y")
+        assert_allclose(As + Ad, Ay)
+        self.assertTrue(np.all(As[:, [2, 3, 6, 7]] == 0))
+
+    def test_logphase_form_and_tied_channel(self):
+        sdindex = np.array([0, 1, 0, 2])  # source 0 and detector 2 share a channel
+        A, _, _ = recon.sdjac(self.sd, self.phi, self.csd[:3], sdindex, "logphase")
+        self.assertEqual(A.shape, (6, 6))
+        # row 0 couples source 0 and detector 2, both channel 0
+        self.assertAlmostEqual(A[0, 0], 2 / abs(self.csd[0]))
+        self.assertAlmostEqual(A[3, 3], 2.0)
+        assert_allclose(A[:3, 3:], 0)
+
+    def test_row_mismatch_raises(self):
+        with self.assertRaises(ValueError):
+            recon.sdjac(self.sd, self.phi[:2], self.csd, self.sdindex, "real")
+
+
+@unittest.skipUnless(HAS_ISO2MESH, "iso2mesh is required")
+class TestRunreconSdcoupling(unittest.TestCase):
+    """Test simultaneous source-detector coupling estimation in runrecon."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.node, _, cls.elem = i2m.meshabox([0, 0, 0], [60, 60, 30], 8)
+        rng = np.random.default_rng(3)
+        c = (0.7 + 0.6 * rng.random(8)) * np.exp(1j * 0.3 * (rng.random(8) - 0.5))
+        cls.ctrue = c - c.mean() + 1  # reachable with the mean pinned at 1+0i
+        cls.truth = np.outer(cls.ctrue[4:], cls.ctrue[:4])
+
+    def _cfg(self, mua, omega=2 * np.pi * 100e6):
+        cfg = {
+            "node": self.node,
+            "elem": self.elem,
+            "prop": np.array([[0, 0, 1, 1], [mua, 1, 0, 1.37]]),
+            "srcpos": np.array(
+                [[20, 20, 0], [40, 20, 0], [20, 40, 0], [40, 40, 0]], float
+            ),
+            "srcdir": np.array([[0, 0, 1]]),
+            "detpos": np.array(
+                [[30, 15, 0], [15, 30, 0], [45, 30, 0], [30, 45, 0]], float
+            ),
+            "detdir": np.array([[0, 0, 1]]),
+            "seg": np.ones(self.elem.shape[0], dtype=int),
+            "omega": omega,
+        }
+        return utility.meshprep(cfg)
+
+    def _recon(self, cfg, lam):
+        return {
+            "prop": cfg["prop"].copy(),
+            "lambda": lam,
+            "seg": np.ones(self.node.shape[0], dtype=int),
+        }
+
+    def _prod_err(self, sd):
+        fit = np.outer(sd[4:], sd[:4])
+        return np.max(np.abs(fit - self.truth)) / np.max(np.abs(self.truth))
+
+    def test_coupling_only(self):
+        """With the image frozen, the couplings are recovered."""
+        cfg, sd = self._cfg(0.01)
+        data = forward.runforward(cfg, sd=sd)[0] * self.truth
+        for reform in ("real", "logphase"):
+            cfg, sd = self._cfg(0.01)
+            out, resid, *_ = recon.runrecon(
+                cfg,
+                self._recon(cfg, 1e-6),
+                data,
+                sd,
+                maxiter=6,
+                report=False,
+                reform=reform,
+                sdcoupling="y",
+                sdfirst=6,
+            )
+            self.assertLess(self._prod_err(out["sd"]), 1e-2, reform)
+            self.assertLess(resid[-1], 0.05 * resid[0], reform)
+
+    def test_joint_coupling_and_absorption(self):
+        """Fitting the couplings removes the bias in the absorption estimate."""
+        cfgt, sdt = self._cfg(0.012)
+        data = forward.runforward(cfgt, sd=sdt)[0] * self.truth
+        cfg, sd = self._cfg(0.01)
+        out, resid, _, updates, *_ = recon.runrecon(
+            cfg,
+            self._recon(cfg, 1e-4),
+            data,
+            sd,
+            maxiter=10,
+            report=False,
+            reform="real",
+            sdcoupling=True,
+            sdfirst=2,
+        )
+        self.assertAlmostEqual(out["prop"][1, 0], 0.012, delta=1e-4)
+        self.assertLess(self._prod_err(out["sd"]), 1e-2)
+        self.assertIn("sd", updates[-1])
+        cfg, sd = self._cfg(0.01)
+        out0, resid0, *_ = recon.runrecon(
+            cfg, self._recon(cfg, 1e-4), data, sd, maxiter=10, report=False
+        )
+        self.assertGreater(resid0[-1], 10 * resid[-1])
+
+    def test_invalid_settings_raise(self):
+        cfg, sd = self._cfg(0.01)
+        data = forward.runforward(cfg, sd=sd)[0]
+        with self.assertRaises(ValueError):
+            recon.runrecon(
+                cfg,
+                self._recon(cfg, 1e-4),
+                data,
+                sd,
+                maxiter=1,
+                report=False,
+                reform="complex",
+                sdcoupling="y",
+            )
+        bad = self._recon(cfg, 1e-4)
+        bad["sdindex"] = np.arange(3)
+        with self.assertRaises(ValueError):
+            recon.runrecon(cfg, bad, data, sd, maxiter=1, report=False, sdcoupling="y")
+        cfg, sd = self._cfg(0.01, omega=0)
+        data = forward.runforward(cfg, sd=sd)[0]
+        with self.assertRaises(ValueError):  # CW (real) data has no imaginary rows
+            recon.runrecon(
+                cfg,
+                self._recon(cfg, 1e-4),
+                data,
+                sd,
+                maxiter=1,
+                report=False,
+                reform="real",
+                sdcoupling="y",
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
