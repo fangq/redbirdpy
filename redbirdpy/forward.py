@@ -379,16 +379,16 @@ def _runforward_mc(
                 # they need the (Nsd, Nn) layout used by the FEM jac() path.
                 # CW mode (outputtype='adjoint') skips J_D, so out['jd'] is
                 # absent; only RF (outputtype='adjoint_mua_d') populates it.
-                Jmua_map[wv] = np.asarray(out["jmua"], dtype=float)
+                Jmua_map[wv] = _mc_jac_sdorder(out["jmua"], detnum)
                 if "jd" in out and out["jd"] is not None:
-                    Jd_map[wv] = np.asarray(out["jd"], dtype=float)
+                    Jd_map[wv] = _mc_jac_sdorder(out["jd"], detnum)
         else:
             phi_out = phi_wv
             detval_out = detphi_wv
             if need_jacobian:
-                Jext_single = {"mua": np.asarray(out["jmua"], dtype=float)}
+                Jext_single = {"mua": _mc_jac_sdorder(out["jmua"], detnum)}
                 if "jd" in out and out["jd"] is not None:
-                    Jext_single["dcoeff"] = np.asarray(out["jd"], dtype=float)
+                    Jext_single["dcoeff"] = _mc_jac_sdorder(out["jd"], detnum)
 
     if is_multi_wv and need_jacobian:
         Jext = {"mua": Jmua_map}
@@ -514,13 +514,32 @@ def _runforward_mcx(
 
     Jext = None
     if need_jacobian:
-        Jext = {"mua": np.asarray(out["jmua"], dtype=float)}
+        Jext = {"mua": _mc_jac_sdorder(out["jmua"], detnum)}
         if "jd" in out and out["jd"] is not None:
-            Jext["dcoeff"] = np.asarray(out["jd"], dtype=float)
+            Jext["dcoeff"] = _mc_jac_sdorder(out["jd"], detnum)
 
     if return_jacobian:
         return detphi, phi, Jext
     return detphi, phi
+
+
+def _mc_jac_sdorder(J, detnum: int) -> np.ndarray:
+    """Reorder the source-detector axis of an mcx/mmc adjoint Jacobian.
+
+    mcx and mmc store the pair (s, d) in column ``s * Nd + d`` (detector
+    fastest), while redbirdpy orders measurements as ``detphi.ravel()`` /
+    sdmap rows, i.e. ``d * Ns + s`` (source fastest).  Permute the last axis
+    so every MC Jacobian lines up with ``detphi.ravel()``.
+    """
+    J = np.asarray(J, dtype=float)
+    nsd = J.shape[-1]
+    if detnum <= 1 or nsd % detnum != 0 or nsd == detnum:
+        return J
+    srcnum = nsd // detnum
+    lead = J.shape[:-1]
+    return np.ascontiguousarray(
+        J.reshape(lead + (srcnum, detnum)).swapaxes(-1, -2).reshape(lead + (nsd,))
+    )
 
 
 def _voxelmean(vol: np.ndarray, pos: np.ndarray, avgsize: float) -> float:

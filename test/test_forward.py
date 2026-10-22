@@ -864,5 +864,33 @@ class TestC0Constant(unittest.TestCase):
         self.assertAlmostEqual(forward.C0, 299792458000.0)
 
 
+class TestMCJacobianOrder(unittest.TestCase):
+    """mcx/mmc Jacobian columns are reordered to match detphi.ravel()."""
+
+    def test_reorder_matches_detphi_ravel(self):
+        ns, nd = 3, 4
+        # mcx/mmc layout: column s * nd + d holds pair (s, d)
+        mc_cols = np.array([[100 * s + d for s in range(ns) for d in range(nd)]])
+        J = np.repeat(mc_cols, 5, axis=0).astype(float)
+        out = forward._mc_jac_sdorder(J, nd)
+        # detphi (nd, ns).ravel() visits (d, s) with s fastest
+        expected = np.array([100 * s + d for d in range(nd) for s in range(ns)])
+        assert_array_equal(out[0], expected)
+        self.assertEqual(out.shape, J.shape)
+
+    def test_reorder_4d_voxel_jacobian(self):
+        ns, nd = 2, 3
+        J = np.random.rand(4, 5, 6, ns * nd)
+        out = forward._mc_jac_sdorder(J, nd)
+        for s in range(ns):
+            for d in range(nd):
+                assert_array_equal(out[..., d * ns + s], J[..., s * nd + d])
+
+    def test_single_detector_or_source_unchanged(self):
+        J = np.random.rand(7, 4)
+        assert_array_equal(forward._mc_jac_sdorder(J, 1), J)
+        assert_array_equal(forward._mc_jac_sdorder(J, 4), J)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
