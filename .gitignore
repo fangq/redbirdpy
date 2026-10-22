@@ -151,3 +151,6 @@ Thumbs.db
 *.nii.gz
 *.mesh
 test_output/
+
+# figures written by the example demos
+example/*.png
