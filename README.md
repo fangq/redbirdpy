@@ -98,6 +98,13 @@ The FEM forward solver is carefully validated against Monte Carlo solvers - **MC
 ### Basic Installation
 
 ```bash
+pip install redbirdpy        # installs numpy, scipy and iso2mesh as dependencies
+pip install redbirdpy[mc]    # also installs pmcx and pmmc for the Monte Carlo solvers
+```
+
+or install the dependencies manually and use the source code from GitHub
+
+```bash
 pip install numpy scipy
 pip install iso2mesh  # or from https://github.com/NeuroJSON/pyiso2mesh
 ```
