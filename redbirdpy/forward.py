@@ -386,14 +386,13 @@ def _runforward_mc(
             phi_out = phi_wv
             detval_out = detphi_wv
             if need_jacobian:
-                Jext_single = {"mua": _mc_jac_sdorder(out["jmua"], detnum)}
+                # dcoeff is always present, empty for CW (no J_D), as in rbrunforward.m
+                Jext_single = {"mua": _mc_jac_sdorder(out["jmua"], detnum), "dcoeff": np.zeros((0, 0))}
                 if "jd" in out and out["jd"] is not None:
                     Jext_single["dcoeff"] = _mc_jac_sdorder(out["jd"], detnum)
 
     if is_multi_wv and need_jacobian:
-        Jext = {"mua": Jmua_map}
-        if Jd_map:
-            Jext["dcoeff"] = Jd_map
+        Jext = {"mua": Jmua_map, "dcoeff": Jd_map}  # Jd_map is empty for CW
     elif need_jacobian:
         Jext = Jext_single
     else:
@@ -514,7 +513,7 @@ def _runforward_mcx(
 
     Jext = None
     if need_jacobian:
-        Jext = {"mua": _mc_jac_sdorder(out["jmua"], detnum)}
+        Jext = {"mua": _mc_jac_sdorder(out["jmua"], detnum), "dcoeff": np.zeros((0, 0))}
         if "jd" in out and out["jd"] is not None:
             Jext["dcoeff"] = _mc_jac_sdorder(out["jd"], detnum)
 
