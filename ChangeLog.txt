@@ -2,6 +2,22 @@ Change Log
 
 == RedbirdPy 0.5.0 (v2026, House Finch), Qianqian Fang <q.fang at neu.edu> ==
 
+ 2026-10-25 [c1a4ce5] [bug] always return Jext["dcoeff"], empty for CW, as rbrunforward.m does
+ 2026-10-25 [54a64f9] [doc] README: pip install redbirdpy and the [mc] extra
+ 2026-10-22 [e65112b] [doc] correct the MC Jacobian description, note the Jacobian order fix and pmcx on macOS
+ 2026-10-22 [a0e7126] [release] bump redbirdpy to 0.4.3
+ 2026-10-22 [72f18f5] [demo] add pmcx TV and binned-TV iterative reconstruction demos, ignore demo figures
+ 2026-10-22 [a188363] [doc] document sdcoupling, regtv, binjac, upsample and sdjac in the README
+ 2026-10-22 [9e598d3] [test] cover regtv, binjac/upsample, sdjac and runrecon coupling estimation
+ 2026-10-22 [686e26c]*[feat] port sdcoupling, regtv, binjac/upsample and sdjac from Redbird MATLAB
+ 2026-10-22 [57227fd]*[bug] reorder mcx/mmc adjoint Jacobian columns to match detphi.ravel()
+ 2026-10-22 [d25a9e9] [bug] accept the 6-D (Nx,Ny,Nz,Nt,1,Nsrc) flux returned by pmcx multi-source runs
+ 2026-10-22 [e9f469a] [bug] keep the numba Jacobian kernel complex for RF fields
+ 2026-10-21 [61872f8] [ci] publish packages only when the run was started by the fangq account
+ 2026-10-21 [25dc13e] [ci] decide PyPI uploads from the PyPI JSON API and never upload when the query fails
+ 2026-10-21 [9d2a5f2] [release] keep the python module version at the published one until the release
+ 2026-10-21 [5e20d6d] [release] set the 0.5.0 (v2026) codename to House Finch
+ 2026-10-21 [49eaa6e] [doc] v0.5.0 What's New, add ChangeLog.txt, document the [mc] extra
  2026-10-21 [dc54b1d] [test] add Monte Carlo (pmmc, CPU) forward tests, add the [mc] extra, bump to 0.5.0
  2026-09-01 [3ba6f54] [doc] point cross-repo references at redbird, not redbird-m
  2026-09-01 [db7987f] [bug] fix addnoise shot-noise scaling and complex-data noise model
