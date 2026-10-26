@@ -237,6 +237,9 @@ def _runforward_mc(
             cfg["elemprop"] = seg.astype(np.int32)
         else:
             cfg["elemprop"] = np.ones(n_elem, dtype=np.int32)
+    elif "elemprop" not in cfg:
+        # no labels at all (meshprep drops a uniform seg): one tissue label
+        cfg["elemprop"] = np.ones(np.asarray(cfg["elem"]).shape[0], dtype=np.int32)
 
     need_jacobian = bool(return_jacobian)
     sd_in = kwargs.get("sd") if need_jacobian else None
