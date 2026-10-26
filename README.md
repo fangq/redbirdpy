@@ -468,6 +468,13 @@ Pass `return_jacobian=True` to obtain the adjoint Jacobian directly from the MC 
 detphi, phi, Jext = rb.runforward(cfg, return_jacobian=True)
 # pmmc (mesh):  Jext['mua'] has shape (Nnode, Nsrc*Ndet)
 # pmcx (voxel): Jext['mua'] has shape (Nx, Ny, Nz, Nsrc*Ndet)
+
+# with an sd table (runrecon passes its own), only the active channels are computed,
+# in sd row order (utility.sd2sdmap builds pmcx/pmmc's cfg['sdmap']):
+detphi, phi, Jext = rb.runforward(cfg, return_jacobian=True, sd=sd)
+# pmmc (mesh):  Jext['mua'] has shape (Nnode, Nactive)
+# pmcx (voxel): Jext['mua'] has shape (Nx, Ny, Nz, Nactive); Jext['sdidx'] locates
+#               each channel in detphi.ravel()
 ```
 
 `runrecon` automatically detects an MC-supplied Jacobian and consumes it in place of the FEM Jacobian. Detector directions (`cfg['detdir']`) are auto-filled from the surface mesh (`getdetdir`) or voxel grid (`getdetdir_vol`) when missing. In CW mode only the mua Jacobian is available; in RF mode (`omega > 0`) both mua and D Jacobians are computed.

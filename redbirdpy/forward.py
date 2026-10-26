@@ -40,7 +40,7 @@ from typing import Dict, Tuple, Optional, Union, List, Any
 
 # Import solver functions from solver module
 from .solver import femsolve
-from .utility import sdmap, getoptodes, deldotdel, getdetdir
+from .utility import sdmap, sd2sdmap, getoptodes, deldotdel, getdetdir
 from .property import extinction
 
 # Optional Monte Carlo backend (mmc); the MC branch in `runforward` falls back
@@ -239,6 +239,7 @@ def _runforward_mc(
             cfg["elemprop"] = np.ones(n_elem, dtype=np.int32)
 
     need_jacobian = bool(return_jacobian)
+    sd_in = kwargs.get("sd") if need_jacobian else None
 
     # CW (omega == 0) cannot separate mua and D from a single measurement set,
     # so request the single-output 'adjoint' kernel (J_mua only); RF (omega>0)
@@ -339,6 +340,11 @@ def _runforward_mc(
         cfg.pop("srcdata", None)
         cfg.pop("extrasrclen", None)
 
+        # with an sd table, the adjoint Jacobian is computed only for its active
+        # channels (cfg['sdmap']), in its row order, matching jac() and the data
+        if sd_in is not None:
+            cfg["sdmap"], _ = sd2sdmap(cfg, _sd_wave(sd_in, wv))
+
         out = _pmmc.run(cfg)
 
         # mmc flux.data layouts:
@@ -379,17 +385,22 @@ def _runforward_mc(
                 # they need the (Nsd, Nn) layout used by the FEM jac() path.
                 # CW mode (outputtype='adjoint') skips J_D, so out['jd'] is
                 # absent; only RF (outputtype='adjoint_mua_d') populates it.
-                Jmua_map[wv] = _mc_jac_sdorder(out["jmua"], detnum)
+                Jmua_map[wv] = _mc_jac_sdorder(out["jmua"], detnum, sd_in is None)
                 if "jd" in out and out["jd"] is not None:
-                    Jd_map[wv] = _mc_jac_sdorder(out["jd"], detnum)
+                    Jd_map[wv] = _mc_jac_sdorder(out["jd"], detnum, sd_in is None)
         else:
             phi_out = phi_wv
             detval_out = detphi_wv
             if need_jacobian:
                 # dcoeff is always present, empty for CW (no J_D), as in rbrunforward.m
-                Jext_single = {"mua": _mc_jac_sdorder(out["jmua"], detnum), "dcoeff": np.zeros((0, 0))}
+                Jext_single = {
+                    "mua": _mc_jac_sdorder(out["jmua"], detnum, sd_in is None),
+                    "dcoeff": np.zeros((0, 0)),
+                }
                 if "jd" in out and out["jd"] is not None:
-                    Jext_single["dcoeff"] = _mc_jac_sdorder(out["jd"], detnum)
+                    Jext_single["dcoeff"] = _mc_jac_sdorder(
+                        out["jd"], detnum, sd_in is None
+                    )
 
     if is_multi_wv and need_jacobian:
         Jext = {"mua": Jmua_map, "dcoeff": Jd_map}  # Jd_map is empty for CW
@@ -455,6 +466,7 @@ def _runforward_mcx(
     cfg["srcpos"] = srcpos
 
     need_jacobian = bool(return_jacobian)
+    sd_in = kwargs.get("sd") if need_jacobian else None
 
     # CW (omega == 0) cannot separate mua and D; ask for the single-output
     # 'adjoint' kernel (J_mua only), RF uses 'adjoint_mua_d'.
@@ -490,6 +502,10 @@ def _runforward_mcx(
     cfg.pop("srcdata", None)
     cfg.pop("extrasrclen", None)
 
+    sdidx = None
+    if sd_in is not None:
+        cfg["sdmap"], sdidx = sd2sdmap(cfg, _sd_wave(sd_in, ""))
+
     out = _pmcx.run(cfg)
 
     # mcxlab raw flux layout: (Nx, Ny, Nz, Nt, Nsrc+Ndet) or with a singleton
@@ -513,32 +529,52 @@ def _runforward_mcx(
 
     Jext = None
     if need_jacobian:
-        Jext = {"mua": _mc_jac_sdorder(out["jmua"], detnum), "dcoeff": np.zeros((0, 0))}
+        Jext = {
+            "mua": _mc_jac_sdorder(out["jmua"], detnum, sdidx is None),
+            "dcoeff": np.zeros((0, 0)),
+        }
         if "jd" in out and out["jd"] is not None:
-            Jext["dcoeff"] = _mc_jac_sdorder(out["jd"], detnum)
+            Jext["dcoeff"] = _mc_jac_sdorder(out["jd"], detnum, sdidx is None)
+        if sdidx is not None:
+            # the channels of sd, located in detphi.ravel(), for runrecon's residual
+            Jext["sdidx"] = sdidx
 
     if return_jacobian:
         return detphi, phi, Jext
     return detphi, phi
 
 
-def _mc_jac_sdorder(J, detnum: int) -> np.ndarray:
+def _mc_jac_sdorder(J, detnum: int, allpairs: bool = True) -> np.ndarray:
     """Reorder the source-detector axis of an mcx/mmc adjoint Jacobian.
 
-    mcx and mmc store the pair (s, d) in column ``s * Nd + d`` (detector
-    fastest), while redbirdpy orders measurements as ``detphi.ravel()`` /
-    sdmap rows, i.e. ``d * Ns + s`` (source fastest).  Permute the last axis
-    so every MC Jacobian lines up with ``detphi.ravel()``.
+    Without cfg['sdmap'], mcx and mmc store the pair (s, d) in column
+    ``s * Nd + d`` (detector fastest), while redbirdpy orders measurements as
+    ``detphi.ravel()`` / sdmap rows, i.e. ``d * Ns + s`` (source fastest).
+    Permute the last axis so every MC Jacobian lines up with
+    ``detphi.ravel()``.  With cfg['sdmap'] built from the sd table by
+    `sd2sdmap` (allpairs=False), the channels already follow the sd rows.
     """
-    J = np.asarray(J, dtype=float)
+    J = np.asarray(J)
+    J = J.astype(complex if np.iscomplexobj(J) else float)  # keep RF Jacobians complex
     nsd = J.shape[-1]
-    if detnum <= 1 or nsd % detnum != 0 or nsd == detnum:
+    if not allpairs or detnum <= 1 or nsd % detnum != 0 or nsd == detnum:
         return J
     srcnum = nsd // detnum
     lead = J.shape[:-1]
     return np.ascontiguousarray(
         J.reshape(lead + (srcnum, detnum)).swapaxes(-1, -2).reshape(lead + (nsd,))
     )
+
+
+def _sd_wave(sd, wv: str) -> np.ndarray:
+    """the sd table of wavelength wv, or the only one, from an sd array or dict"""
+    if isinstance(sd, dict):
+        if wv in sd:
+            return sd[wv]
+        if len(sd) == 1:
+            return next(iter(sd.values()))
+        raise ValueError("runforward: sd has no table for wavelength %s" % wv)
+    return sd
 
 
 def _voxelmean(vol: np.ndarray, pos: np.ndarray, avgsize: float) -> float:

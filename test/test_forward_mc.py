@@ -79,5 +79,40 @@ class TestForwardMC(unittest.TestCase):
         self.assertEqual(np.asarray(self.phi_mc).shape[0], base_cfg()["node"].shape[0])
 
 
+def has_opencl():
+    """True if pmmc can run on its OpenCL backend (device 1), needed by the adjoint Jacobian"""
+    if not (HAS_ISO2MESH and HAS_PMMC):
+        return False
+    try:
+        cfg = base_cfg()
+        cfg.update({"nphoton": 100, "compute": "opencl", "gpuid": 1})
+        forward.runforward(cfg)
+        return True
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(has_opencl(), "requires iso2mesh and pmmc with an OpenCL device")
+class TestForwardMCJacobianSD(unittest.TestCase):
+    def test_sd_selects_jacobian_rows(self):
+        # with an sd table, the MC Jacobian holds the active sd rows only, in sd
+        # order, as jac() does; without it, all pairs in detphi.ravel() order
+        cfg = base_cfg()
+        cfg["srcpos"] = np.array([[20, 20, 0], [15, 20, 0]], dtype=float)
+        cfg["srcdir"] = np.array([[0, 0, 1], [0, 0, 1]], dtype=float)
+        cfg.update({"nphoton": int(3e5), "compute": "opencl", "gpuid": 1, "seed": 1})
+        sd = utility.sdmap(cfg)
+        sd[[1, 2], 2] = 0  # deactivate two of the four channels
+        full = forward.runforward(cfg, return_jacobian=True)[2]["mua"]
+        sub = forward.runforward(cfg, return_jacobian=True, sd=sd)[2]["mua"]
+        rows = np.flatnonzero(sd[:, 2] == 1)
+        self.assertEqual(full.shape[-1], 4)
+        self.assertEqual(sub.shape[-1], rows.size)
+        for c, k in enumerate(rows):
+            # the two runs differ only by GPU run-to-run noise
+            err = np.linalg.norm(full[:, k] - sub[:, c]) / np.linalg.norm(full[:, k])
+            self.assertLess(err, 0.05)
+
+
 if __name__ == "__main__":
     unittest.main()

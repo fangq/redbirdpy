@@ -12,6 +12,7 @@ __all__ = [
     "meshprep",
     "deldotdel",
     "sdmap",
+    "sd2sdmap",
     "getoptodes",
     "getdistance",
     "getltr",
@@ -1041,6 +1042,58 @@ def sdmap(cfg: dict, maxdist: float = np.inf, **kwargs) -> Union[np.ndarray, dic
             sd = np.column_stack([sd, np.ones(len(sd))])
 
         return sd
+
+
+def sd2sdmap(cfg: dict, sd: np.ndarray, md: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Convert an `sdmap` source-detector table into the ``cfg['sdmap']`` input
+    of pmcx/pmmc, which then compute the adjoint Jacobian of these channels only.
+
+    Parameters
+    ----------
+    cfg : dict
+        Forward configuration defining srcpos, detpos and optionally widesrc
+    sd : ndarray
+        Table of one wavelength as returned by `sdmap`: 0-based columns
+        ``[src_col, det_col, active, mode]``, detectors counted after all
+        sources (``srcnum + wfsrcnum + d``)
+    md : int
+        Measurement mode of the Jacobian (1: RF/CW, default; 2: CW); rows
+        whose mode is md or 3 are kept, as the multi-spectral data are
+
+    Returns
+    -------
+    sdmap : ndarray
+        (Nch, 2) 1-based ``[srcid, detid]`` rows, detid counting the rows of
+        detpos, for the active rows of sd in their order; the rows of the
+        Monte Carlo Jacobian then match those of `jac`
+    sdidx : ndarray
+        0-based index of each channel in ``detphi.ravel()``, where detphi is
+        the (Ndet, Nsrc) detector reading array returned by `runforward`
+    """
+    srcnum = np.atleast_2d(cfg["srcpos"]).shape[0]
+    detnum = np.atleast_2d(cfg["detpos"]).shape[0]
+    detoffset = srcnum
+    if cfg.get("widesrc") is not None:
+        detoffset += np.asarray(cfg["widesrc"]).shape[0]
+
+    sd = np.asarray(sd)
+    keep = np.ones(sd.shape[0], dtype=bool)
+    if sd.shape[1] > 2:
+        keep &= sd[:, 2] == 1
+    if sd.shape[1] > 3:
+        keep &= (sd[:, 3] == md) | (sd[:, 3] == 3)
+    sd = sd[keep, :2].astype(np.int64)
+
+    src = sd[:, 0]
+    det = sd[:, 1] - detoffset
+    if np.any(src >= srcnum) or np.any(det < 0) or np.any(det >= detnum):
+        raise ValueError(
+            "sd2sdmap: wide-field sources or detectors are not supported by "
+            "the Monte Carlo Jacobian"
+        )
+
+    return np.column_stack([src + 1, det + 1]), det * srcnum + src
 
 
 def getoptodes(

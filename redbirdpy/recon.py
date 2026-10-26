@@ -283,7 +283,7 @@ def runrecon(
 
         # ---- voxel-grid (mcxlab/pmcx) Jacobian: route through LSQR -------
         # When runforward's mcxlab/pmcx branch returned Jext['mua'] as a 4D
-        # array (Nx, Ny, Nz, Ns*Nd), the Jacobian is too large for the
+        # array (Nx, Ny, Nz, Nch), Nch = Ns*Nd or the active sd rows, the Jacobian is too large for the
         # normal-equation form (J.T @ J would be Nv x Nv).  Use reglsqr
         # (matrix-free LSQR with optional early stopping) to solve
         # J*delta_mu = (detphi0 - detphi) directly and write the voxel
@@ -293,6 +293,8 @@ def runrecon(
         Jext_mua = Jext.get("mua") if isinstance(Jext, dict) else None
         if isinstance(Jext_mua, np.ndarray) and Jext_mua.ndim >= 4:
             rvec = np.asarray(detphi0).ravel() - np.asarray(detphi).ravel()
+            if "sdidx" in Jext:
+                rvec = rvec[Jext["sdidx"]]  # the channels of sd, as Jext["mua"] holds
             lsqr_maxit = int(kwargs.get("lsqrmaxit", 100))
             lsqr_tol = float(kwargs.get("lsqrtol", 1e-6))
             delta_mu_vol, lsqr_info = reglsqr(
@@ -1661,9 +1663,18 @@ def _flatten_detphi(
     wavelengths: List[str],
     rfcw: List[int],
 ) -> np.ndarray:
-    """Flatten detector measurements from nested dict to 1D array."""
+    """Flatten detector measurements from nested dict to 1D array.
+
+    When the sd table lists every source-detector pair of detphi (in the
+    ``detphi.ravel()`` order that `sdmap` produces), only its active rows are
+    kept, as `jac` does for the Jacobian (rbrunrecon.m's sdkeep).
+    """
     if isinstance(detphi, np.ndarray):
-        return detphi.flatten()
+        flat = detphi.flatten()
+        sdarr = _sd_single(sd, wavelengths)
+        if sdarr is not None and sdarr.shape[1] > 2 and sdarr.shape[0] == flat.size:
+            flat = flat[sdarr[:, 2] == 1]
+        return flat
 
     result = []
     for wv in wavelengths:
@@ -1679,6 +1690,15 @@ def _flatten_detphi(
             result.extend(np.asarray(phi_wv).flatten())
 
     return np.array(result)
+
+
+def _sd_single(sd, wavelengths: List[str]):
+    """the sd table of a single-wavelength run, or None"""
+    if isinstance(sd, dict):
+        if len(sd) != 1:
+            return None
+        sd = next(iter(sd.values()))
+    return None if sd is None else np.asarray(sd)
 
 
 def _remap_jacobian(J: np.ndarray, recon: dict, cfg: dict) -> np.ndarray:
