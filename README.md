@@ -4,7 +4,7 @@
 
 * **Copyright**: (C) Qianqian Fang (2005–2026) \<q.fang at neu.edu>
 * **License**: GNU Public License V3 or later
-* **Version**: 0.5.0 (v2026, House Finch)
+* **Version**: 0.6.0 (v2026, House Finch)
 * **GitHub**: [https://github.com/fangq/redbirdpy](https://github.com/fangq/redbirdpy)
 * **PyPI**: [https://pypi.org/project/redbirdpy](https://pypi.org/project/redbirdpy)
 * **Acknowledgement**: This project is supported by the US National Institute of Health (NIH)
